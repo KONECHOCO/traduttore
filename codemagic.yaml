@@ -22,7 +22,7 @@ workflows:
       vars:
         XCODE_WORKSPACE: ios/App/App.xcworkspace
         XCODE_SCHEME: App
-        PROFILE_UUID: REPLACE_WITH_PROFILE_UUID
+        PROFILE_UUID: ae6308dc-d977-44db-964c-ced7df8213b8
       xcode: latest
       node: 22
       cocoapods: default
