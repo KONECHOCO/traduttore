@@ -497,9 +497,9 @@ h1, h2, h3, h4, h5, h6 {
 
 /* Nuance Words Clickable */
 .translated-word {
-  display: inline-block;
+  display: inline;
   cursor: pointer;
-  padding: 0 0.15rem;
+  padding: 0;
   border-radius: 4px;
   transition: background var(--transition-fast);
 }

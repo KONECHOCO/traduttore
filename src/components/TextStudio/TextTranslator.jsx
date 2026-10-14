@@ -23,6 +23,19 @@ import LanguageSelect from '../LanguageSelect';
 import WordInsight from './WordInsight';
 import GlossaryModal from './GlossaryModal';
 
+// Divide il testo in parole toccabili: Intl.Segmenter riconosce le parole anche in cinese,
+// giapponese e thai (lingue senza spazi); in mancanza si divide sugli spazi.
+function segmentWords(text, lang) {
+  if (typeof Intl !== 'undefined' && Intl.Segmenter) {
+    try {
+      return [...new Intl.Segmenter(lang, { granularity: 'word' }).segment(text)].map(s => ({ text: s.segment, isWord: !!s.isWordLike }));
+    } catch {
+      // lingua non supportata dal segmentatore
+    }
+  }
+  return text.split(/(\s+)/).filter(Boolean).map(part => ({ text: part, isWord: !/^\s+$/.test(part) }));
+}
+
 export default function TextTranslator({
   sourceLang,
   setSourceLang,
@@ -192,7 +205,7 @@ export default function TextTranslator({
   };
 
   const wordCount = sourceText.trim() ? sourceText.trim().split(/\s+/).length : 0;
-  const words = translatedText ? translatedText.split(/(\s+)/) : [];
+  const words = translatedText ? segmentWords(translatedText, targetLang) : [];
 
   return (
     <div className="text-studio-wrapper">
@@ -302,8 +315,8 @@ export default function TextTranslator({
                 <Download size={16} /> {fmt(t.textStudio.downloadingModelLong, { langs: downloading.map(l => languageName(l, uiLang, true)).join(', ') })}
               </span>
             ) : translatedText ? (
-              words.map((word, idx) =>
-                /^\s+$/.test(word) ? (
+              words.map(({ text: word, isWord }, idx) =>
+                !isWord ? (
                   word
                 ) : (
                   <span

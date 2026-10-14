@@ -5,7 +5,8 @@ import { useMonetization } from '../services/monetization';
 export default function AdDiagnostics() {
   const { testAds, diag, native, adsReady, isPro } = useMonetization();
   const [open, setOpen] = useState(true);
-  if (!testAds || !native) return null;
+  // niente pannello negli screenshot per gli store (?storeshot)
+  if (!testAds || !native || location.search.includes('storeshot')) return null;
   return (
     <div className="ad-diagnostics">
       <button onClick={() => setOpen(!open)}>
