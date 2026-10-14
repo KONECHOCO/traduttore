@@ -6,68 +6,41 @@ import DocumentScanner from './components/DocumentScanner/DocumentScanner';
 import LearningAcademy from './components/LanguageLearning/LearningAcademy';
 import SettingsModal from './components/Settings/SettingsModal';
 import HistoryModal from './components/HistoryModal';
-import { getTranslation } from './data/translations_i18n';
-import { INITIAL_FLASHCARDS } from './data/learningData';
+import ProModal from './components/ProModal';
+import AdBanner from './components/AdBanner';
+import AdDiagnostics from './components/AdDiagnostics';
+import { getTranslation, detectUiLang } from './data/translations_i18n';
+import { initMonetization, trackAdAction, useMonetization } from './services/monetization';
+import { readJSON, writeJSON } from './services/storage';
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState('text'); // 'text', 'live', 'docs', 'learning', 'settings'
-  const [uiLang, setUiLang] = useState(() => localStorage.getItem('omni_ui_lang') || 'it');
+  const [activeTab, setActiveTab] = useState('text');
+  const [uiLang, setUiLang] = useState(() => localStorage.getItem('omni_ui_lang') || detectUiLang());
   const [theme, setTheme] = useState(() => localStorage.getItem('omni_theme') || 'dark');
   const [soundEnabled, setSoundEnabled] = useState(() => localStorage.getItem('omni_sound') !== 'false');
 
-  // Translation Engine & Keys
-  const [engine, setEngine] = useState(() => localStorage.getItem('omni_engine') || 'neural');
-  const [apiKey, setApiKey] = useState(() => localStorage.getItem('omni_api_key') || '');
+  const [flashcards, setFlashcards] = useState(() => readJSON('omni_flashcards', []));
+  const [glossary, setGlossary] = useState(() => readJSON('omni_glossary', []));
+  const [history, setHistory] = useState(() => readJSON('omni_history', []));
 
-  // Persistent Flashcards
-  const [flashcards, setFlashcards] = useState(() => {
-    try {
-      const saved = localStorage.getItem('omni_flashcards');
-      return saved ? JSON.parse(saved) : INITIAL_FLASHCARDS;
-    } catch {
-      return INITIAL_FLASHCARDS;
-    }
-  });
-
-  // Persistent Glossary
-  const [glossary, setGlossary] = useState(() => {
-    try {
-      const saved = localStorage.getItem('omni_glossary');
-      return saved ? JSON.parse(saved) : [];
-    } catch {
-      return [];
-    }
-  });
-
-  // Persistent Translation History
-  const [history, setHistory] = useState(() => {
-    try {
-      const saved = localStorage.getItem('omni_history');
-      return saved ? JSON.parse(saved) : [];
-    } catch {
-      return [];
-    }
-  });
-
-  // Text Studio active text states
-  const [sourceLang, setSourceLang] = useState('it');
-  const [targetLang, setTargetLang] = useState('en');
-  const [sourceText, setSourceText] = useState('Questo traduttore professionale supporta sfumature di tono, conversazioni live a 180 gradi, conferenze internazionali e guida allo studio.');
+  // Stato dello Studio Testo (condiviso con la cronologia)
+  const [sourceLang, setSourceLang] = useState('auto');
+  const [targetLang, setTargetLang] = useState(() => localStorage.getItem('omni_target_lang') || (uiLang === 'en' ? 'es' : 'en'));
+  const [sourceText, setSourceText] = useState('');
   const [translatedText, setTranslatedText] = useState('');
 
-  // Modals
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
+  const [isProOpen, setIsProOpen] = useState(false);
+  const { bannerHeight } = useMonetization();
 
-  // Sync settings to localStorage and HTML tag
+  useEffect(() => {
+    initMonetization();
+  }, []);
+
   useEffect(() => {
     localStorage.setItem('omni_ui_lang', uiLang);
     document.documentElement.lang = uiLang;
-    // Handle RTL for Arabic
-    if (uiLang === 'ar') {
-      document.documentElement.dir = 'rtl';
-    } else {
-      document.documentElement.dir = 'ltr';
-    }
+    document.documentElement.dir = uiLang === 'ar' ? 'rtl' : 'ltr';
   }, [uiLang]);
 
   useEffect(() => {
@@ -80,46 +53,53 @@ export default function App() {
   }, [soundEnabled]);
 
   useEffect(() => {
-    localStorage.setItem('omni_engine', engine);
-  }, [engine]);
+    localStorage.setItem('omni_target_lang', targetLang);
+  }, [targetLang]);
 
-  // Current translation dictionary
+  useEffect(() => writeJSON('omni_flashcards', flashcards), [flashcards]);
+  useEffect(() => writeJSON('omni_glossary', glossary), [glossary]);
+  useEffect(() => writeJSON('omni_history', history), [history]);
+
+  // Il banner nativo AdMob è disegnato sopra la WebView: la barra di navigazione mobile sta sopra di lui
+  useEffect(() => {
+    document.documentElement.style.setProperty('--banner-h', `${bannerHeight || 0}px`);
+  }, [bannerHeight]);
+
   const t = getTranslation(uiLang);
 
-  // Add new item to history
+  const changeTab = (tab) => {
+    if (tab === activeTab) return;
+    setActiveTab(tab);
+    window.scrollTo(0, 0);
+    trackAdAction();
+  };
+
   const handleAddToHistory = (item) => {
-    setHistory((prev) => {
-      const filtered = prev.filter(h => h.sourceText !== item.sourceText);
-      const updated = [item, ...filtered].slice(0, 50); // keep last 50
-      localStorage.setItem('omni_history', JSON.stringify(updated));
-      return updated;
+    setHistory(prev => [item, ...prev.filter(h => !(h.sourceText === item.sourceText && h.targetLang === item.targetLang))].slice(0, 100));
+  };
+
+  const handleSaveToFlashcards = (card) => {
+    setFlashcards(prev => {
+      if (prev.some(c => c.word === card.word && c.translation === card.translation)) return prev;
+      return [{ id: 'fc-' + Date.now(), box: 0, due: Date.now(), ...card }, ...prev];
     });
   };
 
-  // Add new item to flashcards
-  const handleSaveToFlashcards = (newCard) => {
-    setFlashcards((prev) => {
-      const updated = [{ id: 'fc-' + Date.now(), ...newCard }, ...prev];
-      localStorage.setItem('omni_flashcards', JSON.stringify(updated));
-      return updated;
-    });
-  };
-
-  // Select history item
   const handleSelectHistoryItem = (item) => {
-    setSourceText(item.sourceText);
-    setTranslatedText(item.translatedText);
     setSourceLang(item.sourceLang);
     setTargetLang(item.targetLang);
+    setSourceText(item.sourceText);
+    setTranslatedText(item.translatedText);
     setActiveTab('text');
   };
 
+  const common = { t, uiLang, soundEnabled, glossary };
+
   return (
     <div className="app-container">
-      {/* Top Navbar */}
-      <Navbar 
+      <Navbar
         activeTab={activeTab}
-        setActiveTab={setActiveTab}
+        setActiveTab={changeTab}
         uiLang={uiLang}
         setUiLang={setUiLang}
         t={t}
@@ -128,12 +108,13 @@ export default function App() {
         soundEnabled={soundEnabled}
         setSoundEnabled={setSoundEnabled}
         onOpenHistory={() => setIsHistoryOpen(true)}
+        onOpenPro={() => setIsProOpen(true)}
       />
 
-      {/* Main Viewport */}
       <main className="main-viewport">
         {activeTab === 'text' && (
-          <TextTranslator 
+          <TextTranslator
+            {...common}
             sourceLang={sourceLang}
             setSourceLang={setSourceLang}
             targetLang={targetLang}
@@ -142,76 +123,55 @@ export default function App() {
             setSourceText={setSourceText}
             translatedText={translatedText}
             setTranslatedText={setTranslatedText}
-            t={t}
-            soundEnabled={soundEnabled}
             onSaveToFlashcards={handleSaveToFlashcards}
             onAddToHistory={handleAddToHistory}
-            engine={engine}
-            apiKey={apiKey}
-            glossary={glossary}
             setGlossary={setGlossary}
           />
         )}
 
-        {activeTab === 'live' && (
-          <LiveConversation 
-            t={t}
-            soundEnabled={soundEnabled}
-            engine={engine}
-            apiKey={apiKey}
-            glossary={glossary}
-          />
-        )}
+        {activeTab === 'live' && <LiveConversation {...common} />}
 
-        {activeTab === 'docs' && (
-          <DocumentScanner 
-            t={t}
-            soundEnabled={soundEnabled}
-            engine={engine}
-            apiKey={apiKey}
-            glossary={glossary}
-          />
-        )}
+        {activeTab === 'docs' && <DocumentScanner {...common} />}
 
         {activeTab === 'learning' && (
-          <LearningAcademy 
+          <LearningAcademy
+            {...common}
             flashcards={flashcards}
             setFlashcards={setFlashcards}
-            t={t}
-            soundEnabled={soundEnabled}
           />
         )}
 
         {activeTab === 'settings' && (
-          <SettingsModal 
-            engine={engine}
-            setEngine={setEngine}
-            apiKey={apiKey}
-            setApiKey={setApiKey}
-            uiLang={uiLang}
+          <SettingsModal
+            {...common}
             setUiLang={setUiLang}
             theme={theme}
             setTheme={setTheme}
-            soundEnabled={soundEnabled}
             setSoundEnabled={setSoundEnabled}
             flashcards={flashcards}
             setFlashcards={setFlashcards}
-            glossary={glossary}
             setGlossary={setGlossary}
-            t={t}
+            history={history}
+            setHistory={setHistory}
+            onOpenPro={() => setIsProOpen(true)}
           />
         )}
       </main>
 
-      {/* History Modal */}
-      <HistoryModal 
+      <HistoryModal
         isOpen={isHistoryOpen}
         onClose={() => setIsHistoryOpen(false)}
         history={history}
         setHistory={setHistory}
         onSelectHistoryItem={handleSelectHistoryItem}
         soundEnabled={soundEnabled}
+        t={t}
+        uiLang={uiLang}
       />
+
+      <ProModal isOpen={isProOpen} onClose={() => setIsProOpen(false)} t={t} />
+      <AdBanner t={t} onUpgrade={() => setIsProOpen(true)} />
+      <AdDiagnostics />
     </div>
   );
 }

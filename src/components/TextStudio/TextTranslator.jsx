@@ -1,270 +1,232 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { 
-  ArrowLeftRight, 
-  Mic, 
-  Volume2, 
-  Copy, 
-  Check, 
-  Trash2, 
-  Star, 
-  Sparkles, 
-  BookOpen, 
-  Briefcase, 
-  Smile, 
-  GraduationCap, 
-  Feather,
-  Loader2
+import {
+  ArrowLeftRight,
+  Mic,
+  Volume2,
+  Copy,
+  Check,
+  Trash2,
+  Star,
+  BookOpen,
+  Loader2,
+  Share2,
+  AlertCircle,
+  Download
 } from 'lucide-react';
-import { LANGUAGES, TONES, getLanguageByCode } from '../../data/languages';
-import { translateText } from '../../services/translatorService';
+import { Capacitor } from '@capacitor/core';
+import { Share } from '@capacitor/share';
+import { getLanguageByCode, languageName } from '../../data/languages';
+import { translateText, translationErrorMessage, detectLanguage, isNative } from '../../services/translatorService';
 import { speechService } from '../../services/speechService';
-import NuanceInspector from './NuanceInspector';
+import { fmt } from '../../data/translations_i18n';
+import LanguageSelect from '../LanguageSelect';
+import WordInsight from './WordInsight';
 import GlossaryModal from './GlossaryModal';
 
-export default function TextTranslator({ 
-  sourceLang, 
-  setSourceLang, 
-  targetLang, 
-  setTargetLang, 
-  sourceText, 
-  setSourceText, 
-  translatedText, 
-  setTranslatedText, 
-  t, 
+export default function TextTranslator({
+  sourceLang,
+  setSourceLang,
+  targetLang,
+  setTargetLang,
+  sourceText,
+  setSourceText,
+  translatedText,
+  setTranslatedText,
+  t,
+  uiLang,
   soundEnabled,
   onSaveToFlashcards,
   onAddToHistory,
-  engine,
-  apiKey,
   glossary,
   setGlossary
 }) {
-  const [tone, setTone] = useState('standard');
   const [isTranslating, setIsTranslating] = useState(false);
+  const [downloading, setDownloading] = useState(null);
+  const [error, setError] = useState(null);
+  const [detectedLang, setDetectedLang] = useState(null);
   const [isRecording, setIsRecording] = useState(false);
+  const [interim, setInterim] = useState('');
   const [copied, setCopied] = useState(false);
   const [savedCard, setSavedCard] = useState(false);
   const [selectedWord, setSelectedWord] = useState('');
-  const [nuances, setNuances] = useState([]);
-  const [falseFriends, setFalseFriends] = useState([]);
-  const [alternatives, setAlternatives] = useState([]);
-  const [phonetic, setPhonetic] = useState('');
   const [speechRate, setSpeechRate] = useState(1.0);
   const [isGlossaryOpen, setIsGlossaryOpen] = useState(false);
 
-  const debounceTimerRef = useRef(null);
+  const requestRef = useRef(0);
+  const effectiveSource = sourceLang === 'auto' ? detectedLang : sourceLang;
 
-  // Trigger translation when text, language or tone changes
+  // Traduzione automatica mentre si scrive (con attesa di 500 ms)
   useEffect(() => {
     if (!sourceText.trim()) {
       setTranslatedText('');
-      setNuances([]);
-      setFalseFriends([]);
-      setAlternatives([]);
-      setPhonetic('');
-      return;
+      setError(null);
+      setDetectedLang(null);
+      return undefined;
     }
-
-    if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
-
-    debounceTimerRef.current = setTimeout(async () => {
+    const request = ++requestRef.current;
+    const timer = setTimeout(async () => {
       setIsTranslating(true);
+      setError(null);
       try {
         const result = await translateText({
           text: sourceText,
           sourceLang,
           targetLang,
-          tone,
           glossary,
-          apiKey,
-          engine
-        });
-
-        setTranslatedText(result.translatedText);
-        setNuances(result.nuances || []);
-        setFalseFriends(result.falseFriends || []);
-        setAlternatives(result.alternatives || []);
-        setPhonetic(result.phonetic || '');
-
-        if (soundEnabled && result.translatedText) {
-          speechService.playSuccessChime();
-        }
-
-        // Add to recent history
-        if (onAddToHistory && result.translatedText) {
-          onAddToHistory({
-            sourceText,
-            translatedText: result.translatedText,
-            sourceLang,
-            targetLang,
-            tone,
-            timestamp: new Date().toLocaleTimeString()
-          });
-        }
-      } catch (err) {
-        console.error('Translation error:', err);
-      } finally {
-        setIsTranslating(false);
-      }
-    }, 400);
-
-    return () => {
-      if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
-    };
-  }, [sourceText, sourceLang, targetLang, tone, glossary, engine]);
-
-  // Swap source and target languages
-  const handleSwapLanguages = () => {
-    if (soundEnabled) speechService.playClickSound();
-    const tempLang = sourceLang;
-    setSourceLang(targetLang);
-    setTargetLang(tempLang);
-
-    const tempText = sourceText;
-    setSourceText(translatedText);
-    setTranslatedText(tempText);
-  };
-
-  // Voice Dictation (Speech to Text)
-  const toggleSpeechInput = () => {
-    if (isRecording) {
-      speechService.stopSpeechRecognition();
-      setIsRecording(false);
-    } else {
-      const srcObj = getLanguageByCode(sourceLang);
-      const recognition = speechService.startSpeechRecognition({
-        lang: srcObj.speechCode || 'it-IT',
-        continuous: false,
-        onResult: ({ finalTranscript, interimTranscript }) => {
-          const spoken = finalTranscript || interimTranscript;
-          if (spoken) {
-            setSourceText(prev => (prev ? prev + ' ' + spoken : spoken));
+          onStatus: (status, langs) => {
+            if (request === requestRef.current) setDownloading(status === 'downloading' ? langs : null);
           }
-        },
-        onError: (err) => {
-          console.warn('Speech error:', err);
-          setIsRecording(false);
-        },
-        onEnd: () => {
-          setIsRecording(false);
+        });
+        if (request !== requestRef.current) return;
+        setTranslatedText(result.translatedText);
+        setDetectedLang(result.detectedLang);
+        setSelectedWord('');
+      } catch (err) {
+        if (request !== requestRef.current) return;
+        console.warn('Translation error:', err);
+        setError(translationErrorMessage(err, t));
+        setTranslatedText('');
+      } finally {
+        if (request === requestRef.current) {
+          setIsTranslating(false);
+          setDownloading(null);
         }
-      });
-      if (recognition) setIsRecording(true);
-    }
-  };
+      }
+    }, 500);
+    return () => clearTimeout(timer);
+  }, [sourceText, sourceLang, targetLang, glossary]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Voice Output (Text to Speech)
-  const handlePlayVoice = (textToSpeak, langCode) => {
-    if (soundEnabled) speechService.playClickSound();
-    const langObj = getLanguageByCode(langCode);
-    speechService.speakText(textToSpeak, langObj.voice, speechRate);
-  };
-
-  // Copy to clipboard
-  const handleCopy = () => {
-    if (!translatedText) return;
-    if (soundEnabled) speechService.playClickSound();
-    navigator.clipboard.writeText(translatedText);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
-
-  // Save to flashcard deck
-  const handleSaveFlashcard = () => {
-    if (!sourceText || !translatedText) return;
-    if (soundEnabled) speechService.playClickSound();
-    if (onSaveToFlashcards) {
-      onSaveToFlashcards({
-        word: sourceText.slice(0, 50),
-        translation: translatedText.slice(0, 70),
-        sourceLang,
+  // In cronologia solo quando l'utente ha smesso di scrivere da qualche secondo
+  useEffect(() => {
+    if (!translatedText || isTranslating || !effectiveSource) return undefined;
+    const timer = setTimeout(() => {
+      onAddToHistory({
+        sourceText: sourceText.trim(),
+        translatedText,
+        sourceLang: effectiveSource,
         targetLang,
-        ipa: phonetic || '',
-        category: `Studio (${tone.toUpperCase()})`,
-        notes: `Tradotto con tono ${tone}`
+        timestamp: Date.now()
       });
-      setSavedCard(true);
-      setTimeout(() => setSavedCard(false), 2200);
+    }, 2500);
+    return () => clearTimeout(timer);
+  }, [translatedText, isTranslating]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const click = () => {
+    if (soundEnabled) speechService.playClickSound();
+  };
+
+  const handleSwapLanguages = () => {
+    click();
+    const newTarget = effectiveSource || (targetLang === 'en' ? 'it' : 'en');
+    setSourceLang(targetLang);
+    setTargetLang(newTarget);
+    setSourceText(translatedText);
+    setTranslatedText(sourceText);
+  };
+
+  const toggleSpeechInput = async () => {
+    if (isRecording) {
+      await speechService.stopListening();
+      return;
+    }
+    // In modalità "rileva lingua" si detta nella lingua dell'interfaccia
+    const voice = getLanguageByCode(sourceLang === 'auto' ? detectedLang || uiLang : sourceLang).voice;
+    const started = await speechService.startListening({
+      lang: voice,
+      onPartial: text => setInterim(text),
+      onFinal: text => {
+        setInterim('');
+        setSourceText(prev => (prev.trim() ? `${prev.trim()} ${text}` : text));
+      },
+      onEnd: () => {
+        setIsRecording(false);
+        setInterim('');
+      },
+      onError: code => {
+        setIsRecording(false);
+        setError(t.errors[code === 'permission' ? 'MIC_PERMISSION' : code === 'unsupported' ? 'SPEECH_UNSUPPORTED' : 'SPEECH_FAILED']);
+      }
+    });
+    if (started) setIsRecording(true);
+  };
+
+  const handlePlayVoice = async (text, langCode) => {
+    click();
+    let code = langCode;
+    if (code === 'auto') code = detectedLang || (await detectLanguage(text)) || uiLang;
+    speechService.speakText(text, getLanguageByCode(code).voice, speechRate);
+  };
+
+  const handleCopy = async () => {
+    if (!translatedText) return;
+    click();
+    try {
+      await navigator.clipboard.writeText(translatedText);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      // appunti non disponibili
     }
   };
 
-  // Replace a word when clicking a synonym
-  const handleReplaceWord = (oldWord, newWord) => {
-    if (soundEnabled) speechService.playClickSound();
-    const regex = new RegExp(`\\b${oldWord}\\b`, 'i');
-    setTranslatedText(prev => prev.replace(regex, newWord));
+  const handleShare = async () => {
+    click();
+    try {
+      await Share.share({ text: translatedText });
+    } catch {
+      // condivisione annullata
+    }
   };
 
-  // Text Stats
-  const charCount = sourceText.length;
+  const handleSaveFlashcard = () => {
+    if (!sourceText.trim() || !translatedText || !effectiveSource) return;
+    click();
+    onSaveToFlashcards({
+      word: sourceText.trim().slice(0, 120),
+      translation: translatedText.slice(0, 160),
+      sourceLang: effectiveSource,
+      targetLang
+    });
+    setSavedCard(true);
+    setTimeout(() => setSavedCard(false), 2200);
+  };
+
   const wordCount = sourceText.trim() ? sourceText.trim().split(/\s+/).length : 0;
-  const readingTimeSec = Math.ceil(wordCount / 3.5); // ~200 wpm
+  const words = translatedText ? translatedText.split(/(\s+)/) : [];
 
   return (
     <div className="text-studio-wrapper">
-      {/* Tone & Style Selector Bar */}
       <div className="tone-selector-bar">
-        <span style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-dim)', marginRight: '0.5rem' }}>
-          {t.textStudio.tone}:
-        </span>
-        {TONES.map(item => {
-          const IconComp = item.id === 'formal' ? Briefcase : item.id === 'informal' ? Smile : item.id === 'academic' ? GraduationCap : item.id === 'creative' ? Feather : Sparkles;
-          return (
-            <button
-              key={item.id}
-              className={`tone-pill ${tone === item.id ? 'active' : ''}`}
-              onClick={() => {
-                if (soundEnabled) speechService.playClickSound();
-                setTone(item.id);
-              }}
-              title={item.desc}
-            >
-              <IconComp size={14} />
-              <span>{item.label}</span>
-            </button>
-          );
-        })}
-
-        <div style={{ marginLeft: 'auto' }}>
-          <button 
-            className="btn-secondary" 
-            style={{ padding: '0.35rem 0.8rem', fontSize: '0.8rem' }}
-            onClick={() => {
-              if (soundEnabled) speechService.playClickSound();
-              setIsGlossaryOpen(true);
-            }}
-          >
-            <BookOpen size={14} />
-            {t.textStudio.glossaryBtn} ({glossary.length})
-          </button>
-        </div>
+        {isNative && <span className="studio-hint">{t.textStudio.offlineHint}</span>}
+        <button
+          className="btn-secondary btn-small"
+          style={{ marginInlineStart: 'auto' }}
+          onClick={() => {
+            click();
+            setIsGlossaryOpen(true);
+          }}
+        >
+          <BookOpen size={14} />
+          {t.textStudio.glossaryBtn} ({glossary.length})
+        </button>
       </div>
 
-      {/* Main Dual Translation Grid */}
       <div className="translation-grid">
-        {/* Source Text Box */}
         <div className="translator-box">
           <div className="box-header">
-            <select 
-              className="lang-selector-select" 
-              value={sourceLang} 
-              onChange={e => setSourceLang(e.target.value)}
-              style={{ fontSize: '0.95rem', fontWeight: 600 }}
+            <LanguageSelect
+              value={sourceLang}
+              onChange={setSourceLang}
+              uiLang={uiLang}
+              autoLabel={t.textStudio.detectLanguage}
               id="source-lang-select"
-            >
-              {LANGUAGES.map(l => (
-                <option key={l.code} value={l.code}>
-                  {l.flag} {l.name} ({l.native})
-                </option>
-              ))}
-            </select>
-
-            <button 
-              className="icon-btn" 
-              onClick={() => setSourceText('')}
-              title={t.textStudio.clear}
-              disabled={!sourceText}
-            >
+              ariaLabel={t.textStudio.sourceLang}
+              style={{ fontSize: '0.95rem', fontWeight: 600, maxWidth: '62%' }}
+            />
+            {sourceLang === 'auto' && detectedLang && (
+              <span className="detected-chip">{fmt(t.textStudio.detected, { lang: languageName(detectedLang, uiLang) })}</span>
+            )}
+            <button className="icon-btn" onClick={() => setSourceText('')} title={t.textStudio.clear} aria-label={t.textStudio.clear} disabled={!sourceText}>
               <Trash2 size={16} />
             </button>
           </div>
@@ -272,168 +234,157 @@ export default function TextTranslator({
           <textarea
             className="text-area-input"
             placeholder={t.textStudio.sourcePlaceholder}
-            value={sourceText}
+            value={interim ? `${sourceText}${sourceText ? ' ' : ''}${interim}` : sourceText}
             onChange={e => setSourceText(e.target.value)}
-            rows={8}
+            rows={7}
             id="source-text-input"
+            dir="auto"
           />
 
           <div className="box-footer">
             <div className="tool-buttons">
-              <button 
+              <button
                 className={`icon-btn ${isRecording ? 'recording' : ''}`}
                 onClick={toggleSpeechInput}
                 title={t.textStudio.speechInput}
+                aria-label={t.textStudio.speechInput}
                 id="btn-voice-dictation"
               >
                 <Mic size={18} />
               </button>
-
-              <button 
-                className="icon-btn" 
+              <button
+                className="icon-btn"
                 onClick={() => handlePlayVoice(sourceText, sourceLang)}
                 title={t.textStudio.listenVoice}
+                aria-label={t.textStudio.listenVoice}
                 disabled={!sourceText}
                 id="btn-play-source-voice"
               >
                 <Volume2 size={18} />
               </button>
             </div>
-
             <div className="text-stats">
-              {charCount} {t.textStudio.chars} • {wordCount} {t.textStudio.words} • ~{readingTimeSec}s {t.textStudio.readingTime}
+              {sourceText.length} {t.textStudio.chars} • {wordCount} {t.textStudio.words}
             </div>
           </div>
         </div>
 
-        {/* Target Translation Box */}
         <div className="translator-box">
           <div className="box-header">
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
-              <button 
-                className="swap-languages-btn" 
-                onClick={handleSwapLanguages} 
-                title={t.textStudio.swap}
-                id="btn-swap-languages"
-              >
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', minWidth: 0 }}>
+              <button className="swap-languages-btn" onClick={handleSwapLanguages} title={t.textStudio.swap} aria-label={t.textStudio.swap} id="btn-swap-languages">
                 <ArrowLeftRight size={16} />
               </button>
-
-              <select 
-                className="lang-selector-select" 
-                value={targetLang} 
-                onChange={e => setTargetLang(e.target.value)}
-                style={{ fontSize: '0.95rem', fontWeight: 600 }}
+              <LanguageSelect
+                value={targetLang}
+                onChange={setTargetLang}
+                uiLang={uiLang}
                 id="target-lang-select"
-              >
-                {LANGUAGES.map(l => (
-                  <option key={l.code} value={l.code}>
-                    {l.flag} {l.name} ({l.native})
-                  </option>
-                ))}
-              </select>
+                ariaLabel={t.textStudio.targetLang}
+                style={{ fontSize: '0.95rem', fontWeight: 600, minWidth: 0 }}
+              />
             </div>
-
             {isTranslating && (
-              <span style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', color: '#818cf8', fontSize: '0.8rem' }}>
-                <Loader2 size={14} className="spin-icon" style={{ animation: 'spin 1s linear infinite' }} />
-                {t.textStudio.translating}
+              <span className="status-inline">
+                <Loader2 size={14} className="spin-icon" />
+                {downloading ? t.textStudio.downloadingModel : t.textStudio.translating}
               </span>
             )}
           </div>
 
-          <div className="text-area-input" style={{ overflowY: 'auto' }}>
-            {translatedText ? (
-              translatedText.split(' ').map((word, idx) => (
-                <span 
-                  key={idx} 
-                  className="translated-word"
-                  onClick={() => {
-                    if (soundEnabled) speechService.playClickSound();
-                    setSelectedWord(word.replace(/[.,/#!$%^&*;:{}=\-_`~()?"']/g, ''));
-                  }}
-                >
-                  {word}{' '}
-                </span>
-              ))
-            ) : (
-              <span style={{ color: 'var(--text-dim)' }}>
-                {t.textStudio.targetPlaceholder}
+          <div className="text-area-input translation-output" dir="auto" aria-live="polite">
+            {error ? (
+              <span className="error-text">
+                <AlertCircle size={16} /> {error}
               </span>
+            ) : downloading ? (
+              <span className="muted-text">
+                <Download size={16} /> {fmt(t.textStudio.downloadingModelLong, { langs: downloading.map(l => languageName(l, uiLang, true)).join(', ') })}
+              </span>
+            ) : translatedText ? (
+              words.map((word, idx) =>
+                /^\s+$/.test(word) ? (
+                  word
+                ) : (
+                  <span
+                    key={idx}
+                    className={`translated-word ${selectedWord === word ? 'selected' : ''}`}
+                    onClick={() => {
+                      click();
+                      setSelectedWord(word);
+                    }}
+                  >
+                    {word}
+                  </span>
+                )
+              )
+            ) : (
+              <span className="muted-text">{t.textStudio.targetPlaceholder}</span>
             )}
           </div>
 
           <div className="box-footer">
             <div className="tool-buttons">
-              <button 
-                className="icon-btn" 
+              <button
+                className="icon-btn"
                 onClick={() => handlePlayVoice(translatedText, targetLang)}
                 title={t.textStudio.listenVoice}
+                aria-label={t.textStudio.listenVoice}
                 disabled={!translatedText}
                 id="btn-play-target-voice"
               >
                 <Volume2 size={18} />
               </button>
-
-              {/* Speech rate toggle */}
               <button
                 className="icon-btn"
-                onClick={() => setSpeechRate(r => r === 1.0 ? 0.8 : r === 0.8 ? 1.2 : 1.0)}
-                title="Velocità voce (0.8x, 1.0x, 1.2x)"
+                onClick={() => setSpeechRate(r => (r === 1.0 ? 0.75 : r === 0.75 ? 1.25 : 1.0))}
+                title={t.textStudio.voiceSpeed}
+                aria-label={t.textStudio.voiceSpeed}
                 style={{ fontSize: '0.75rem', fontWeight: 700 }}
               >
                 {speechRate}x
               </button>
-
-              <button 
-                className="icon-btn" 
-                onClick={handleCopy}
-                title={t.textStudio.copy}
-                disabled={!translatedText}
-                id="btn-copy-target"
-              >
-                {copied ? <Check size={18} style={{ color: '#10b981' }} /> : <Copy size={18} />}
+              <button className="icon-btn" onClick={handleCopy} title={t.textStudio.copy} aria-label={t.textStudio.copy} disabled={!translatedText} id="btn-copy-target">
+                {copied ? <Check size={18} style={{ color: 'var(--success)' }} /> : <Copy size={18} />}
               </button>
-
-              <button 
-                className="icon-btn" 
+              {Capacitor.isNativePlatform() && (
+                <button className="icon-btn" onClick={handleShare} title={t.common.share} aria-label={t.common.share} disabled={!translatedText}>
+                  <Share2 size={18} />
+                </button>
+              )}
+              <button
+                className="icon-btn"
                 onClick={handleSaveFlashcard}
                 title={t.textStudio.saveFlashcard}
-                disabled={!translatedText}
+                aria-label={t.textStudio.saveFlashcard}
+                disabled={!translatedText || !effectiveSource}
                 id="btn-save-flashcard"
               >
                 <Star size={18} style={{ color: savedCard ? '#facc15' : 'inherit', fill: savedCard ? '#facc15' : 'none' }} />
               </button>
             </div>
-
-            {savedCard && (
-              <span style={{ fontSize: '0.8rem', color: '#facc15', fontWeight: 600 }}>
-                ★ {t.textStudio.savedFlashcard}
-              </span>
-            )}
+            {savedCard && <span className="saved-note">★ {t.textStudio.savedFlashcard}</span>}
           </div>
         </div>
       </div>
 
-      {/* Deep Linguistic Nuance & Synonym Inspector */}
-      <NuanceInspector 
+      <WordInsight
         selectedWord={selectedWord}
-        setSelectedWord={setSelectedWord}
-        nuances={nuances}
-        falseFriends={falseFriends}
-        alternatives={alternatives}
-        phonetic={phonetic}
-        onReplaceWord={handleReplaceWord}
+        sourceText={sourceText}
+        translatedText={translatedText}
+        sourceLang={effectiveSource}
+        targetLang={targetLang}
         t={t}
+        uiLang={uiLang}
+        onSaveToFlashcards={onSaveToFlashcards}
       />
 
-      {/* Custom Glossary Terminology Modal */}
-      <GlossaryModal 
+      <GlossaryModal
         isOpen={isGlossaryOpen}
         onClose={() => setIsGlossaryOpen(false)}
         glossary={glossary}
         setGlossary={setGlossary}
-        soundEnabled={soundEnabled}
+        t={t}
       />
     </div>
   );

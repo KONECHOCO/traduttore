@@ -1,494 +1,483 @@
-import React, { useState } from 'react';
-import { 
-  GraduationCap, 
-  Layers, 
-  Mic, 
-  BookOpen, 
-  CheckCircle2, 
-  RotateCw, 
-  Volume2, 
-  ChevronLeft, 
-  ChevronRight, 
-  Award, 
-  Sparkles,
-  HelpCircle
-} from 'lucide-react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
+import { Layers, Mic, BookOpen, Award, Volume2, Trash2, Star, Loader2, RotateCw, CheckCircle2, AlertCircle, ChevronRight } from 'lucide-react';
 import confetti from 'canvas-confetti';
-import { PHRASEBOOKS, FALSE_FRIENDS, VERB_CONJUGATIONS, QUIZ_QUESTIONS } from '../../data/learningData';
-import { speechService } from '../../services/speechService';
-import { getLanguageByCode } from '../../data/languages';
+import { PHRASEBOOK, PHRASEBOOK_CATEGORIES, scheduleCard, isDue, SRS_INTERVALS_DAYS } from '../../data/learningData';
+import { speechService, textSimilarity } from '../../services/speechService';
+import { translateText, translationErrorMessage } from '../../services/translatorService';
+import { getLanguageByCode, languageName } from '../../data/languages';
+import { fmt } from '../../data/translations_i18n';
+import LanguageSelect from '../LanguageSelect';
 
-export default function LearningAcademy({ flashcards, setFlashcards, t, soundEnabled }) {
-  const [learningTab, setLearningTab] = useState('cards'); // 'cards', 'pronounce', 'phrasebook', 'verbs', 'quiz'
+function shuffle(list) {
+  const a = [...list];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
 
-  // Flashcards state
-  const [currentCardIndex, setCurrentCardIndex] = useState(0);
-  const [isFlipped, setIsFlipped] = useState(false);
+export default function LearningAcademy({ flashcards, setFlashcards, t, uiLang, soundEnabled }) {
+  const [learningTab, setLearningTab] = useState('cards');
+  const [learnLang, setLearnLang] = useState(() => localStorage.getItem('omni_learn_lang') || (uiLang === 'en' ? 'es' : 'en'));
+  useEffect(() => {
+    localStorage.setItem('omni_learn_lang', learnLang);
+  }, [learnLang]);
 
-  // Pronunciation Coach state
-  const [pronounceTarget, setPronounceTarget] = useState({
-    text: 'Mutually beneficial agreement',
-    lang: 'en',
-    voice: 'en-US'
-  });
-  const [isRecordingPronounce, setIsRecordingPronounce] = useState(false);
-  const [recordedSpeech, setRecordedSpeech] = useState('');
-  const [pronounceScore, setPronounceScore] = useState(null);
-
-  // Verb conjugator state
-  const [selectedVerbKey, setSelectedVerbKey] = useState('to be');
-
-  // Quiz state
-  const [quizIndex, setQuizIndex] = useState(0);
-  const [selectedOption, setSelectedOption] = useState(null);
-  const [quizScore, setQuizScore] = useState(0);
-  const [quizFinished, setQuizFinished] = useState(false);
-
-  // Flip flashcard
-  const handleFlipCard = () => {
+  const click = () => {
     if (soundEnabled) speechService.playClickSound();
-    setIsFlipped(!isFlipped);
   };
 
-  const nextCard = () => {
-    if (soundEnabled) speechService.playClickSound();
-    setIsFlipped(false);
-    setCurrentCardIndex((prev) => (prev + 1) % flashcards.length);
-  };
+  const tabs = [
+    { id: 'cards', icon: Layers, label: `${t.learning.tabCards} (${flashcards.length})` },
+    { id: 'phrasebook', icon: BookOpen, label: t.learning.tabPhrasebook },
+    { id: 'pronounce', icon: Mic, label: t.learning.tabPronounce },
+    { id: 'quiz', icon: Award, label: t.learning.tabQuiz }
+  ];
 
-  const prevCard = () => {
-    if (soundEnabled) speechService.playClickSound();
-    setIsFlipped(false);
-    setCurrentCardIndex((prev) => (prev - 1 + flashcards.length) % flashcards.length);
-  };
-
-  const currentCard = flashcards[currentCardIndex] || flashcards[0];
-
-  // Pronunciation Coach - Record & Evaluate
-  const handleStartPronunciationTest = () => {
-    setPronounceScore(null);
-    setRecordedSpeech('');
-    setIsRecordingPronounce(true);
-
-    const rec = speechService.startSpeechRecognition({
-      lang: pronounceTarget.voice,
-      continuous: false,
-      onResult: ({ finalTranscript }) => {
-        if (finalTranscript) {
-          setRecordedSpeech(finalTranscript);
-          // Evaluate phonetic similarity
-          const targetClean = pronounceTarget.text.toLowerCase().replace(/[^a-z0-9]/gi, '');
-          const spokenClean = finalTranscript.toLowerCase().replace(/[^a-z0-9]/gi, '');
-          
-          let score = 75;
-          if (spokenClean === targetClean) {
-            score = 98;
-          } else if (spokenClean.includes(targetClean) || targetClean.includes(spokenClean)) {
-            score = 88;
-          } else {
-            score = Math.floor(Math.random() * 20) + 65;
-          }
-
-          setPronounceScore(score);
-          if (score >= 85) {
-            confetti({ particleCount: 50, spread: 60, origin: { y: 0.7 } });
-          }
-        }
-      },
-      onError: () => setIsRecordingPronounce(false),
-      onEnd: () => setIsRecordingPronounce(false)
-    });
-  };
-
-  // Quiz Option Click
-  const handleSelectQuizOption = (optIdx) => {
-    if (selectedOption !== null) return;
-    if (soundEnabled) speechService.playClickSound();
-    setSelectedOption(optIdx);
-
-    const currentQ = QUIZ_QUESTIONS[quizIndex];
-    if (optIdx === currentQ.correctIndex) {
-      setQuizScore(s => s + 1);
-      if (soundEnabled) speechService.playSuccessChime();
-    }
-  };
-
-  const handleNextQuizQuestion = () => {
-    if (soundEnabled) speechService.playClickSound();
-    if (quizIndex + 1 < QUIZ_QUESTIONS.length) {
-      setQuizIndex(quizIndex + 1);
-      setSelectedOption(null);
-    } else {
-      setQuizFinished(true);
-      confetti({ particleCount: 120, spread: 80, origin: { y: 0.6 } });
-    }
-  };
-
-  const restartQuiz = () => {
-    setQuizIndex(0);
-    setSelectedOption(null);
-    setQuizScore(0);
-    setQuizFinished(false);
-  };
+  const [practicePhrase, setPracticePhrase] = useState(null);
 
   return (
     <div className="learning-academy-container">
-      {/* Learning Navigation Tabs */}
       <div className="live-header-bar">
-        <div className="nav-tabs" style={{ margin: '0 auto' }}>
-          <button 
-            className={`tab-btn ${learningTab === 'cards' ? 'active' : ''}`}
-            onClick={() => { if (soundEnabled) speechService.playClickSound(); setLearningTab('cards'); }}
-            id="learn-tab-cards"
-          >
-            <Layers size={16} />
-            {t.learning.tabCards} ({flashcards.length})
-          </button>
-
-          <button 
-            className={`tab-btn ${learningTab === 'pronounce' ? 'active' : ''}`}
-            onClick={() => { if (soundEnabled) speechService.playClickSound(); setLearningTab('pronounce'); }}
-            id="learn-tab-pronounce"
-          >
-            <Mic size={16} />
-            {t.learning.tabPronounce}
-          </button>
-
-          <button 
-            className={`tab-btn ${learningTab === 'phrasebook' ? 'active' : ''}`}
-            onClick={() => { if (soundEnabled) speechService.playClickSound(); setLearningTab('phrasebook'); }}
-            id="learn-tab-phrasebook"
-          >
-            <BookOpen size={16} />
-            {t.learning.tabPhrasebook}
-          </button>
-
-          <button 
-            className={`tab-btn ${learningTab === 'verbs' ? 'active' : ''}`}
-            onClick={() => { if (soundEnabled) speechService.playClickSound(); setLearningTab('verbs'); }}
-            id="learn-tab-verbs"
-          >
-            <RotateCw size={16} />
-            {t.learning.tabVerbs}
-          </button>
-
-          <button 
-            className={`tab-btn ${learningTab === 'quiz' ? 'active' : ''}`}
-            onClick={() => { if (soundEnabled) speechService.playClickSound(); setLearningTab('quiz'); }}
-            id="learn-tab-quiz"
-          >
-            <Award size={16} />
-            {t.learning.tabQuiz}
-          </button>
+        <div className="nav-tabs sub-tabs">
+          {tabs.map(({ id, icon: Icon, label }) => (
+            <button key={id} className={`tab-btn ${learningTab === id ? 'active' : ''}`} onClick={() => { click(); setLearningTab(id); }} id={`learn-tab-${id}`}>
+              <Icon size={16} />
+              <span>{label}</span>
+            </button>
+          ))}
         </div>
+        {(learningTab === 'phrasebook' || learningTab === 'pronounce') && (
+          <label className="field-label inline">
+            {t.learning.studyLang}
+            <LanguageSelect value={learnLang} onChange={setLearnLang} uiLang={uiLang} />
+          </label>
+        )}
       </div>
 
-      {/* 1. FLASHCARDS SPACED REPETITION */}
-      {learningTab === 'cards' && currentCard && (
-        <div style={{ textAlign: 'center' }}>
-          <p style={{ color: 'var(--text-dim)', fontSize: '0.85rem', marginBottom: '1rem' }}>
-            Carta {currentCardIndex + 1} di {flashcards.length} • {t.learning.flipCard}
-          </p>
+      {learningTab === 'cards' && <FlashcardDeck flashcards={flashcards} setFlashcards={setFlashcards} t={t} uiLang={uiLang} click={click} />}
+      {learningTab === 'phrasebook' && (
+        <Phrasebook
+          learnLang={learnLang}
+          t={t}
+          uiLang={uiLang}
+          click={click}
+          onAddCard={card => setFlashcards(prev => (prev.some(c => c.word === card.word) ? prev : [{ id: `fc-${Date.now()}`, box: 0, due: Date.now(), ...card }, ...prev]))}
+          onPractice={phrase => {
+            setPracticePhrase(phrase);
+            setLearningTab('pronounce');
+          }}
+        />
+      )}
+      {learningTab === 'pronounce' && <PronunciationCoach learnLang={learnLang} phrase={practicePhrase} t={t} uiLang={uiLang} soundEnabled={soundEnabled} />}
+      {learningTab === 'quiz' && <Quiz flashcards={flashcards} t={t} click={click} soundEnabled={soundEnabled} />}
+    </div>
+  );
+}
 
-          <div className="flashcard-stage" onClick={handleFlipCard}>
+// ---------- Flashcard con ripasso a intervalli ----------
+function FlashcardDeck({ flashcards, setFlashcards, t, uiLang, click }) {
+  const [isFlipped, setIsFlipped] = useState(false);
+  const [showAll, setShowAll] = useState(false);
+  const dueCards = useMemo(() => flashcards.filter(isDue).sort((a, b) => (a.due || 0) - (b.due || 0)), [flashcards]);
+  const current = dueCards[0];
+
+  const answer = (knew) => {
+    click();
+    setIsFlipped(false);
+    setFlashcards(prev => prev.map(c => (c.id === current.id ? scheduleCard(c, knew) : c)));
+  };
+
+  if (flashcards.length === 0) {
+    return (
+      <div className="glass-panel empty-panel">
+        <Layers size={36} style={{ color: 'var(--primary)' }} />
+        <h3>{t.learning.noCardsTitle}</h3>
+        <p>{t.learning.noCardsText}</p>
+      </div>
+    );
+  }
+
+  const nextDue = flashcards.reduce((min, c) => Math.min(min, c.due || 0), Infinity);
+
+  return (
+    <div style={{ textAlign: 'center' }}>
+      <p className="muted-text" style={{ fontSize: '0.85rem' }}>
+        {fmt(t.learning.dueToday, { due: dueCards.length, total: flashcards.length })}
+      </p>
+
+      {current ? (
+        <>
+          <div className="flashcard-stage" onClick={() => { click(); setIsFlipped(!isFlipped); }}>
             <div className={`flashcard-3d ${isFlipped ? 'flipped' : ''}`}>
-              {/* Card Front */}
               <div className="flashcard-face flashcard-front">
-                <span className="flashcard-category">{currentCard.category}</span>
+                <span className="flashcard-category">{languageName(current.sourceLang, uiLang)} · {fmt(t.learning.box, { n: (current.box || 0) + 1 })}</span>
+                <h3 className="flashcard-main-word" dir="auto">{current.word}</h3>
                 <div>
-                  <h3 className="flashcard-main-word">{currentCard.word}</h3>
-                  {currentCard.ipa && <div className="flashcard-ipa">{currentCard.ipa}</div>}
-                </div>
-                <div style={{ display: 'flex', justifyContent: 'center', gap: '0.5rem' }}>
-                  <button 
-                    className="icon-btn" 
-                    onClick={(e) => {
+                  <button
+                    className="icon-btn"
+                    onClick={e => {
                       e.stopPropagation();
-                      speechService.speakText(currentCard.word, getLanguageByCode(currentCard.sourceLang).voice);
+                      speechService.speakText(current.word, getLanguageByCode(current.sourceLang).voice);
                     }}
-                    title="Ascolta pronuncia"
+                    aria-label={t.textStudio.listenVoice}
                   >
                     <Volume2 size={20} />
                   </button>
+                  <p className="muted-text" style={{ fontSize: '0.75rem' }}>{t.learning.flipCard}</p>
                 </div>
               </div>
-
-              {/* Card Back */}
               <div className="flashcard-face flashcard-back">
-                <span className="flashcard-category" style={{ color: '#38bdf8' }}>Traduzione & Contesto</span>
-                <div>
-                  <h3 style={{ fontSize: '1.6rem', color: '#fff', marginBottom: '0.5rem' }}>
-                    {currentCard.translation}
-                  </h3>
-                  {currentCard.example && (
-                    <p style={{ fontStyle: 'italic', color: '#cbd5e1', fontSize: '0.95rem' }}>
-                      "{currentCard.example}"
-                    </p>
-                  )}
-                </div>
-                {currentCard.notes && (
-                  <p style={{ fontSize: '0.8rem', color: '#94a3b8' }}>
-                    💡 {currentCard.notes}
-                  </p>
-                )}
+                <span className="flashcard-category" style={{ color: '#38bdf8' }}>{languageName(current.targetLang, uiLang)}</span>
+                <h3 className="flashcard-translation" dir="auto">{current.translation}</h3>
+                <button
+                  className="icon-btn"
+                  onClick={e => {
+                    e.stopPropagation();
+                    speechService.speakText(current.translation, getLanguageByCode(current.targetLang).voice);
+                  }}
+                  aria-label={t.textStudio.listenVoice}
+                >
+                  <Volume2 size={20} />
+                </button>
               </div>
             </div>
           </div>
-
-          {/* Flashcard Navigation */}
-          <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '1rem', marginTop: '1.5rem' }}>
-            <button className="icon-btn" onClick={prevCard} title="Precedente">
-              <ChevronLeft size={22} />
-            </button>
-            <button className="btn-secondary" onClick={nextCard} style={{ color: '#10b981', borderColor: 'rgba(16, 185, 129, 0.4)' }}>
-              ✓ {t.learning.know}
-            </button>
-            <button className="btn-secondary" onClick={nextCard} style={{ color: '#f59e0b', borderColor: 'rgba(245, 158, 11, 0.4)' }}>
-              ↻ {t.learning.review}
-            </button>
-            <button className="icon-btn" onClick={nextCard} title="Successiva">
-              <ChevronRight size={22} />
-            </button>
+          <div className="button-row center">
+            <button className="btn-secondary btn-review" onClick={() => answer(false)}>↻ {t.learning.review}</button>
+            <button className="btn-secondary btn-know" onClick={() => answer(true)}>✓ {t.learning.know}</button>
           </div>
+          <p className="muted-text" style={{ fontSize: '0.75rem', marginTop: '0.75rem' }}>
+            {fmt(t.learning.srsExplain, { days: SRS_INTERVALS_DAYS.slice(1).join(', ') })}
+          </p>
+        </>
+      ) : (
+        <div className="glass-panel empty-panel">
+          <CheckCircle2 size={36} style={{ color: 'var(--success)' }} />
+          <h3>{t.learning.allDone}</h3>
+          <p>{fmt(t.learning.nextReview, { date: new Date(nextDue).toLocaleDateString(uiLang) })}</p>
         </div>
       )}
 
-      {/* 2. PRONUNCIATION COACH */}
-      {learningTab === 'pronounce' && (
-        <div className="glass-panel" style={{ maxWidth: '650px', margin: '0 auto', textAlign: 'center', padding: '2.5rem' }}>
-          <Sparkles size={32} style={{ color: 'var(--primary)', margin: '0 auto 1rem auto' }} />
-          <h3 style={{ fontSize: '1.4rem', marginBottom: '0.5rem' }}>{t.learning.tabPronounce}</h3>
-          <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', marginBottom: '1.5rem' }}>
-            Ascolta il modello audio madrelingua, poi premi il microfono e ripeti la frase. L'AI valuterà la tua cadenza e fonetica.
-          </p>
-
-          <div style={{ background: 'var(--bg-app)', border: '1px solid var(--border-subtle)', borderRadius: '16px', padding: '1.5rem', marginBottom: '1.5rem' }}>
-            <span style={{ fontSize: '0.8rem', color: 'var(--text-dim)', textTransform: 'uppercase' }}>Frase da pronunciare:</span>
-            <h4 style={{ fontSize: '1.6rem', color: 'var(--text-main)', margin: '0.5rem 0' }}>
-              "{pronounceTarget.text}"
-            </h4>
-            <button 
-              className="btn-secondary" 
-              onClick={() => speechService.speakText(pronounceTarget.text, pronounceTarget.voice)}
-              style={{ marginTop: '0.5rem' }}
-            >
-              <Volume2 size={16} />
-              {t.learning.listenNative}
-            </button>
-          </div>
-
-          <button 
-            className={`mic-action-btn ${isRecordingPronounce ? 'active' : ''}`}
-            onClick={handleStartPronunciationTest}
-            title={t.learning.recordPronounce}
-            style={{ width: '70px', height: '70px', margin: '1rem auto' }}
-            id="btn-record-pronounce"
-          >
-            <Mic size={30} />
-          </button>
-          <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
-            {isRecordingPronounce ? 'In ascolto della tua voce...' : t.learning.recordPronounce}
-          </p>
-
-          {recordedSpeech && (
-            <p style={{ fontSize: '0.9rem', color: 'var(--text-dim)', marginTop: '1rem' }}>
-              Voce rilevata: <em>"{recordedSpeech}"</em>
-            </p>
-          )}
-
-          {pronounceScore !== null && (
-            <div style={{ marginTop: '1.5rem', animation: 'fadeIn 0.4s ease' }}>
-              <div 
-                className="pronunciation-score-ring"
-                style={{ 
-                  border: `4px solid ${pronounceScore >= 85 ? '#10b981' : pronounceScore >= 70 ? '#f59e0b' : '#ef4444'}`,
-                  color: pronounceScore >= 85 ? '#10b981' : pronounceScore >= 70 ? '#f59e0b' : '#ef4444'
-                }}
-              >
-                {pronounceScore}%
+      <button className="btn-secondary btn-small" style={{ marginTop: '1.5rem' }} onClick={() => setShowAll(!showAll)}>
+        {showAll ? t.learning.hideDeck : fmt(t.learning.showDeck, { n: flashcards.length })}
+      </button>
+      {showAll && (
+        <div className="glass-panel deck-list">
+          {flashcards.map(card => (
+            <div key={card.id} className="list-row">
+              <div style={{ textAlign: 'start' }} dir="auto">
+                <strong>{card.word}</strong>
+                <div className="muted-text" style={{ fontSize: '0.85rem' }}>{card.translation}</div>
               </div>
-              <h4 style={{ fontSize: '1.1rem', color: 'var(--text-main)' }}>
-                {pronounceScore >= 85 ? t.learning.excellent : pronounceScore >= 70 ? t.learning.good : t.learning.needsWork}
-              </h4>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* 3. CURATED PHRASEBOOKS */}
-      {learningTab === 'phrasebook' && (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))', gap: '1.25rem' }}>
-          {PHRASEBOOKS.map(pb => (
-            <div key={pb.id} className="glass-panel" style={{ padding: '1.5rem' }}>
-              <h3 style={{ fontSize: '1.15rem', color: '#818cf8', display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '1rem' }}>
-                <BookOpen size={18} />
-                {pb.title}
-              </h3>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-                {pb.phrases.map((phrase, idx) => (
-                  <div key={idx} style={{ padding: '0.9rem', background: 'var(--bg-app)', borderRadius: '12px', border: '1px solid var(--border-subtle)' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '0.5rem' }}>
-                      <strong style={{ fontSize: '0.95rem', color: 'var(--text-main)' }}>{phrase.orig}</strong>
-                      <button 
-                        className="icon-btn" 
-                        onClick={() => speechService.speakText(phrase.trans, 'en-US')}
-                        title="Ascolta audio"
-                      >
-                        <Volume2 size={16} />
-                      </button>
-                    </div>
-                    <div style={{ color: '#06b6d4', fontSize: '0.9rem', fontWeight: 600, marginTop: '0.3rem' }}>
-                      {phrase.trans}
-                    </div>
-                    <div style={{ color: '#94a3b8', fontSize: '0.78rem', fontFamily: 'var(--font-mono)', marginTop: '0.2rem' }}>
-                      {phrase.phonetic}
-                    </div>
-                    <div style={{ color: 'var(--text-dim)', fontSize: '0.75rem', marginTop: '0.4rem', borderTop: '1px dashed var(--border-subtle)', paddingTop: '0.3rem' }}>
-                      💡 {phrase.tip}
-                    </div>
-                  </div>
-                ))}
-              </div>
+              <button className="icon-btn" onClick={() => setFlashcards(prev => prev.filter(c => c.id !== card.id))} aria-label={t.common.delete}>
+                <Trash2 size={16} style={{ color: 'var(--danger)' }} />
+              </button>
             </div>
           ))}
         </div>
       )}
+    </div>
+  );
+}
 
-      {/* 4. VERB CONJUGATIONS */}
-      {learningTab === 'verbs' && (
-        <div className="glass-panel" style={{ maxWidth: '800px', margin: '0 auto', padding: '1.5rem' }}>
-          <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1.5rem', overflowX: 'auto', paddingBottom: '0.5rem' }}>
-            {Object.keys(VERB_CONJUGATIONS).map(key => (
-              <button 
-                key={key} 
-                className={`btn-secondary ${selectedVerbKey === key ? 'active' : ''}`}
-                style={{ background: selectedVerbKey === key ? 'var(--primary-light)' : 'transparent', borderColor: selectedVerbKey === key ? 'var(--primary)' : 'var(--border-subtle)', color: selectedVerbKey === key ? '#818cf8' : 'var(--text-main)' }}
-                onClick={() => setSelectedVerbKey(key)}
-              >
-                {VERB_CONJUGATIONS[key].infinitive}
-              </button>
-            ))}
-          </div>
+// ---------- Frasario tradotto on-device ----------
+function Phrasebook({ learnLang, t, uiLang, click, onAddCard, onPractice }) {
+  const [category, setCategory] = useState(PHRASEBOOK_CATEGORIES[0]);
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+  const [added, setAdded] = useState({});
 
-          {VERB_CONJUGATIONS[selectedVerbKey] && (
-            <div>
-              <h3 style={{ fontSize: '1.3rem', marginBottom: '0.5rem' }}>
-                {VERB_CONJUGATIONS[selectedVerbKey].infinitive} ({VERB_CONJUGATIONS[selectedVerbKey].lang})
-              </h3>
+  useEffect(() => {
+    let cancelled = false;
+    const phrases = PHRASEBOOK[category];
+    setLoading(true);
+    setError(null);
+    setRows([]);
+    (async () => {
+      try {
+        const out = [];
+        for (const en of phrases) {
+          const phrase = learnLang === 'en' ? en : (await translateText({ text: en, sourceLang: 'en', targetLang: learnLang })).translatedText;
+          const meaning = uiLang === learnLang ? '' : uiLang === 'en' ? en : (await translateText({ text: en, sourceLang: 'en', targetLang: uiLang })).translatedText;
+          if (cancelled) return;
+          out.push({ en, phrase, meaning });
+          setRows([...out]);
+        }
+      } catch (err) {
+        if (!cancelled) setError(translationErrorMessage(err, t));
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [category, learnLang, uiLang]); // eslint-disable-line react-hooks/exhaustive-deps
 
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '1rem', marginTop: '1.25rem' }}>
-                <div style={{ background: 'var(--bg-app)', padding: '1rem', borderRadius: '12px', border: '1px solid var(--border-subtle)' }}>
-                  <h4 style={{ color: '#818cf8', marginBottom: '0.75rem', fontSize: '0.95rem' }}>Presente</h4>
-                  {VERB_CONJUGATIONS[selectedVerbKey].present.map((v, i) => (
-                    <div key={i} style={{ fontSize: '0.85rem', marginBottom: '0.35rem', color: 'var(--text-muted)' }}>• {v}</div>
-                  ))}
-                </div>
-
-                <div style={{ background: 'var(--bg-app)', padding: '1rem', borderRadius: '12px', border: '1px solid var(--border-subtle)' }}>
-                  <h4 style={{ color: '#06b6d4', marginBottom: '0.75rem', fontSize: '0.95rem' }}>Passato</h4>
-                  {VERB_CONJUGATIONS[selectedVerbKey].past.map((v, i) => (
-                    <div key={i} style={{ fontSize: '0.85rem', marginBottom: '0.35rem', color: 'var(--text-muted)' }}>• {v}</div>
-                  ))}
-                </div>
-
-                <div style={{ background: 'var(--bg-app)', padding: '1rem', borderRadius: '12px', border: '1px solid var(--border-subtle)' }}>
-                  <h4 style={{ color: '#10b981', marginBottom: '0.75rem', fontSize: '0.95rem' }}>Futuro</h4>
-                  {VERB_CONJUGATIONS[selectedVerbKey].future.map((v, i) => (
-                    <div key={i} style={{ fontSize: '0.85rem', marginBottom: '0.35rem', color: 'var(--text-muted)' }}>• {v}</div>
-                  ))}
-                </div>
-              </div>
-            </div>
-          )}
+  return (
+    <div>
+      <div className="chip-row">
+        {PHRASEBOOK_CATEGORIES.map(cat => (
+          <button key={cat} className={`tone-pill ${category === cat ? 'active' : ''}`} onClick={() => { click(); setCategory(cat); }}>
+            {t.learning.categories[cat]}
+          </button>
+        ))}
+      </div>
+      <p className="muted-text" style={{ fontSize: '0.75rem', margin: '0.5rem 0 1rem' }}>{t.learning.phrasebookNote}</p>
+      {error && (
+        <div className="alert-box">
+          <AlertCircle size={16} /> {error}
         </div>
       )}
-
-      {/* 5. SKILL SPEED QUIZ */}
-      {learningTab === 'quiz' && (
-        <div className="glass-panel" style={{ maxWidth: '650px', margin: '0 auto', padding: '2rem' }}>
-          {!quizFinished ? (
-            <div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem' }}>
-                <span style={{ fontSize: '0.85rem', color: 'var(--text-dim)', fontWeight: 600 }}>
-                  {t.learning.question} {quizIndex + 1} di {QUIZ_QUESTIONS.length}
-                </span>
-                <span style={{ fontSize: '0.85rem', color: '#818cf8', fontWeight: 600 }}>
-                  Punti: {quizScore}
-                </span>
-              </div>
-
-              <h3 style={{ fontSize: '1.25rem', marginBottom: '1.5rem', lineHeight: '1.4' }}>
-                {QUIZ_QUESTIONS[quizIndex].question}
-              </h3>
-
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', marginBottom: '1.5rem' }}>
-                {QUIZ_QUESTIONS[quizIndex].options.map((option, optIdx) => {
-                  const isChosen = selectedOption === optIdx;
-                  const isCorrect = optIdx === QUIZ_QUESTIONS[quizIndex].correctIndex;
-                  let bg = 'var(--bg-app)';
-                  let border = 'var(--border-subtle)';
-
-                  if (selectedOption !== null) {
-                    if (isCorrect) {
-                      bg = 'rgba(16, 185, 129, 0.15)';
-                      border = '#10b981';
-                    } else if (isChosen) {
-                      bg = 'rgba(239, 68, 68, 0.15)';
-                      border = '#ef4444';
-                    }
-                  }
-
-                  return (
-                    <button
-                      key={optIdx}
-                      style={{
-                        padding: '1rem 1.25rem',
-                        borderRadius: '12px',
-                        background: bg,
-                        border: `1px solid ${border}`,
-                        color: 'var(--text-main)',
-                        textAlign: 'left',
-                        fontSize: '0.95rem',
-                        cursor: selectedOption === null ? 'pointer' : 'default',
-                        transition: 'all 0.2s ease'
-                      }}
-                      onClick={() => handleSelectQuizOption(optIdx)}
-                    >
-                      {option}
-                    </button>
-                  );
-                })}
-              </div>
-
-              {selectedOption !== null && (
-                <div style={{ padding: '1rem', background: 'rgba(99, 102, 241, 0.1)', borderRadius: '12px', border: '1px solid rgba(99, 102, 241, 0.2)', marginBottom: '1.25rem' }}>
-                  <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
-                    💡 <strong>Spiegazione:</strong> {QUIZ_QUESTIONS[quizIndex].explanation}
-                  </p>
-                </div>
-              )}
-
-              {selectedOption !== null && (
-                <div style={{ textAlign: 'right' }}>
-                  <button className="btn-primary" onClick={handleNextQuizQuestion} id="btn-next-quiz">
-                    {quizIndex + 1 < QUIZ_QUESTIONS.length ? t.learning.nextQuestion : t.learning.finishQuiz}
-                  </button>
-                </div>
-              )}
-            </div>
-          ) : (
-            <div style={{ textAlign: 'center', padding: '1.5rem 0' }}>
-              <Award size={56} style={{ color: '#facc15', margin: '0 auto 1rem auto' }} />
-              <h2 style={{ fontSize: '1.8rem', marginBottom: '0.5rem' }}>Quiz Completato!</h2>
-              <p style={{ fontSize: '1.1rem', color: 'var(--text-muted)', marginBottom: '1.5rem' }}>
-                Hai totalizzato <strong>{quizScore} su {QUIZ_QUESTIONS.length}</strong> risposte esatte.
-              </p>
-              <button className="btn-primary" onClick={restartQuiz} id="btn-quiz-again">
-                <RotateCw size={16} />
-                {t.learning.quizAgain}
+      <div className="phrase-grid">
+        {rows.map(row => (
+          <div key={row.en} className="phrase-card">
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.5rem' }}>
+              <strong dir="auto" style={{ fontSize: '1rem' }}>{row.phrase}</strong>
+              <button className="icon-btn" onClick={() => speechService.speakText(row.phrase, getLanguageByCode(learnLang).voice)} aria-label={t.textStudio.listenVoice}>
+                <Volume2 size={16} />
               </button>
             </div>
-          )}
+            {row.meaning && <div dir="auto" style={{ color: 'var(--secondary)', fontSize: '0.9rem', marginTop: '0.25rem' }}>{row.meaning}</div>}
+            <div className="button-row" style={{ marginTop: '0.6rem' }}>
+              <button
+                className="btn-secondary btn-small"
+                disabled={added[row.en]}
+                onClick={() => {
+                  click();
+                  onAddCard({ word: row.phrase, translation: row.meaning || row.en, sourceLang: learnLang, targetLang: row.meaning ? uiLang : 'en' });
+                  setAdded(prev => ({ ...prev, [row.en]: true }));
+                }}
+              >
+                <Star size={14} /> {added[row.en] ? t.textStudio.savedFlashcard : t.learning.addCard}
+              </button>
+              <button className="btn-secondary btn-small" onClick={() => { click(); onPractice(row.phrase); }}>
+                <Mic size={14} /> {t.learning.practice}
+              </button>
+            </div>
+          </div>
+        ))}
+        {loading && (
+          <div className="phrase-card muted-text">
+            <Loader2 size={16} className="spin-icon" /> {t.textStudio.translating}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ---------- Pronuncia: confronto reale tra frase attesa e frase riconosciuta ----------
+function PronunciationCoach({ learnLang, phrase, t, uiLang, soundEnabled }) {
+  const [target, setTarget] = useState(phrase || '');
+  const [loadingDefault, setLoadingDefault] = useState(false);
+  const [recording, setRecording] = useState(false);
+  const [heard, setHeard] = useState('');
+  const [score, setScore] = useState(null);
+  const [error, setError] = useState(null);
+  const targetRef = useRef(target);
+  useEffect(() => {
+    targetRef.current = target;
+  }, [target]);
+
+  // Frase iniziale: la prima del frasario, tradotta nella lingua di studio
+  useEffect(() => {
+    if (phrase) {
+      setTarget(phrase);
+      return;
+    }
+    let cancelled = false;
+    setLoadingDefault(true);
+    const base = PHRASEBOOK.basics[0];
+    (learnLang === 'en' ? Promise.resolve({ translatedText: base }) : translateText({ text: base, sourceLang: 'en', targetLang: learnLang }))
+      .then(r => !cancelled && setTarget(r.translatedText))
+      .catch(err => !cancelled && setError(translationErrorMessage(err, t)))
+      .finally(() => !cancelled && setLoadingDefault(false));
+    return () => {
+      cancelled = true;
+    };
+  }, [phrase, learnLang]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const record = async () => {
+    if (recording) {
+      await speechService.stopListening();
+      return;
+    }
+    setError(null);
+    setScore(null);
+    setHeard('');
+    const started = await speechService.startListening({
+      lang: getLanguageByCode(learnLang).voice,
+      onPartial: text => setHeard(text),
+      onFinal: text => {
+        setHeard(text);
+        const s = textSimilarity(targetRef.current, text);
+        setScore(s);
+        if (s >= 85) {
+          if (soundEnabled) speechService.playSuccessChime();
+          confetti({ particleCount: 60, spread: 60, origin: { y: 0.7 } });
+        }
+      },
+      onEnd: () => setRecording(false),
+      onError: code => {
+        setRecording(false);
+        setError(t.errors[code === 'permission' ? 'MIC_PERMISSION' : code === 'unsupported' ? 'SPEECH_UNSUPPORTED' : 'SPEECH_FAILED']);
+      }
+    });
+    if (started) setRecording(true);
+  };
+
+  const color = score >= 85 ? 'var(--success)' : score >= 60 ? 'var(--warning)' : 'var(--danger)';
+
+  return (
+    <div className="glass-panel" style={{ maxWidth: '650px', margin: '0 auto', textAlign: 'center', padding: '2rem' }}>
+      <h3 style={{ fontSize: '1.3rem', marginBottom: '0.5rem' }}>{t.learning.tabPronounce}</h3>
+      <p className="muted-text" style={{ fontSize: '0.9rem', marginBottom: '1.25rem' }}>
+        {fmt(t.learning.pronounceIntro, { lang: languageName(learnLang, uiLang, true) })}
+      </p>
+
+      <textarea
+        className="text-area-input pronounce-target"
+        dir="auto"
+        rows={2}
+        value={loadingDefault ? '…' : target}
+        onChange={e => setTarget(e.target.value)}
+        aria-label={t.learning.phraseToSay}
+      />
+      <button className="btn-secondary" onClick={() => speechService.speakText(target, getLanguageByCode(learnLang).voice, 0.9)} disabled={!target} style={{ margin: '0.75rem auto' }}>
+        <Volume2 size={16} />
+        {t.learning.listenNative}
+      </button>
+
+      <button className={`mic-action-btn ${recording ? 'active' : ''}`} onClick={record} aria-label={t.learning.recordPronounce} style={{ width: '70px', height: '70px', margin: '1rem auto' }} id="btn-record-pronounce" disabled={!target.trim()}>
+        <Mic size={30} />
+      </button>
+      <p className="muted-text" style={{ fontSize: '0.85rem' }}>{recording ? t.liveConv.listening : t.learning.recordPronounce}</p>
+
+      {error && (
+        <div className="alert-box" style={{ marginTop: '1rem' }}>
+          <AlertCircle size={16} /> {error}
+        </div>
+      )}
+      {heard && (
+        <p style={{ fontSize: '0.9rem', color: 'var(--text-dim)', marginTop: '1rem' }} dir="auto">
+          {t.learning.heard}: <em>“{heard}”</em>
+        </p>
+      )}
+      {score !== null && (
+        <div style={{ marginTop: '1rem' }}>
+          <div className="pronunciation-score-ring" style={{ border: `4px solid ${color}`, color }}>{score}%</div>
+          <h4>{score >= 85 ? t.learning.excellent : score >= 60 ? t.learning.good : t.learning.needsWork}</h4>
+          <p className="muted-text" style={{ fontSize: '0.75rem', marginTop: '0.5rem' }}>{t.learning.scoreExplain}</p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------- Quiz generato dalle flashcard dell'utente ----------
+function Quiz({ flashcards, t, click, soundEnabled }) {
+  const makeQuestions = () =>
+    shuffle(flashcards)
+      .slice(0, 10)
+      .map(card => {
+        const wrong = shuffle(flashcards.filter(c => c.id !== card.id && c.translation !== card.translation)).slice(0, 3).map(c => c.translation);
+        const options = shuffle([card.translation, ...wrong]);
+        return { card, options, correctIndex: options.indexOf(card.translation) };
+      });
+
+  const [questions, setQuestions] = useState(() => (flashcards.length >= 4 ? makeQuestions() : []));
+  const [index, setIndex] = useState(0);
+  const [selected, setSelected] = useState(null);
+  const [score, setScore] = useState(0);
+  const [finished, setFinished] = useState(false);
+
+  if (flashcards.length < 4) {
+    return (
+      <div className="glass-panel empty-panel">
+        <Award size={36} style={{ color: '#facc15' }} />
+        <h3>{t.learning.quizNeedsCards}</h3>
+        <p>{fmt(t.learning.quizNeedsCardsText, { n: 4 - flashcards.length })}</p>
+      </div>
+    );
+  }
+
+  const restart = () => {
+    click();
+    setQuestions(makeQuestions());
+    setIndex(0);
+    setSelected(null);
+    setScore(0);
+    setFinished(false);
+  };
+
+  if (finished) {
+    return (
+      <div className="glass-panel empty-panel">
+        <Award size={56} style={{ color: '#facc15' }} />
+        <h2>{fmt(t.learning.quizResult, { score, total: questions.length })}</h2>
+        <button className="btn-primary" onClick={restart} id="btn-quiz-again">
+          <RotateCw size={16} />
+          {t.learning.quizAgain}
+        </button>
+      </div>
+    );
+  }
+
+  const q = questions[index];
+  return (
+    <div className="glass-panel" style={{ maxWidth: '650px', margin: '0 auto', padding: '2rem' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '1.25rem', fontSize: '0.85rem', fontWeight: 600 }}>
+        <span className="muted-text">{fmt(t.learning.questionOf, { n: index + 1, total: questions.length })}</span>
+        <span style={{ color: '#818cf8' }}>{fmt(t.learning.points, { n: score })}</span>
+      </div>
+      <p className="muted-text" style={{ fontSize: '0.85rem' }}>{t.learning.quizPrompt}</p>
+      <h3 style={{ fontSize: '1.4rem', margin: '0.5rem 0 1.5rem' }} dir="auto">{q.card.word}</h3>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', marginBottom: '1.5rem' }}>
+        {q.options.map((option, i) => {
+          const state = selected === null ? '' : i === q.correctIndex ? 'correct' : i === selected ? 'wrong' : '';
+          return (
+            <button
+              key={i}
+              className={`quiz-option ${state}`}
+              dir="auto"
+              onClick={() => {
+                if (selected !== null) return;
+                click();
+                setSelected(i);
+                if (i === q.correctIndex) {
+                  setScore(s => s + 1);
+                  if (soundEnabled) speechService.playSuccessChime();
+                }
+              }}
+            >
+              {option}
+            </button>
+          );
+        })}
+      </div>
+      {selected !== null && (
+        <div style={{ textAlign: 'end' }}>
+          <button
+            className="btn-primary"
+            id="btn-next-quiz"
+            onClick={() => {
+              click();
+              if (index + 1 < questions.length) {
+                setIndex(index + 1);
+                setSelected(null);
+              } else {
+                setFinished(true);
+                confetti({ particleCount: 120, spread: 80, origin: { y: 0.6 } });
+              }
+            }}
+          >
+            {index + 1 < questions.length ? t.learning.nextQuestion : t.learning.finishQuiz}
+            <ChevronRight size={16} />
+          </button>
         </div>
       )}
     </div>

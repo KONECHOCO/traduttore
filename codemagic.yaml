@@ -1,0 +1,87 @@
+# OmniLingo — build per App Store e Play Store (modello: OmniTransit).
+# iOS: ML Kit supporta solo CocoaPods, quindi si compila il workspace (ios/App/App.xcworkspace);
+#      `npx cap sync ios` su macOS esegue anche `pod install`.
+#      Profilo App Store in ios/profiles (creato via API App Store Connect con ikonet_asc.py bundle-profile).
+# Android: keystore "omnilingo_android" da caricare su Codemagic (Code signing identities).
+# Nessun trigger automatico: la build si avvia a mano.
+workflows:
+  ios-app-store:
+    name: OmniLingo iOS App Store
+    max_build_duration: 90
+    instance_type: mac_mini_m4
+    integrations:
+      app_store_connect: Ikonet Solutions
+    environment:
+      ios_signing:
+        # Codemagic richiede almeno un profilo qui: quello di FuelSaver serve solo a questo,
+        # `xcode-project use-profiles` sceglie il profilo con bundle id corrispondente (installato dallo script).
+        provisioning_profiles:
+          - fuelsaver_appstore
+        certificates:
+          - ithelpdesk_distribution_20260916
+      vars:
+        XCODE_WORKSPACE: ios/App/App.xcworkspace
+        XCODE_SCHEME: App
+        PROFILE_UUID: REPLACE_WITH_PROFILE_UUID
+      xcode: latest
+      node: 22
+      cocoapods: default
+    scripts:
+      - name: Install npm dependencies
+        script: npm ci
+      - name: Build web app and sync iOS project (pod install)
+        script: |
+          npm run build
+          npx cap sync ios
+      - name: Install App Store provisioning profile
+        script: |
+          PROFILES_DIR="$HOME/Library/MobileDevice/Provisioning Profiles"
+          mkdir -p "$PROFILES_DIR"
+          cp ios/profiles/omnilingo_appstore.mobileprovision "$PROFILES_DIR/$PROFILE_UUID.mobileprovision"
+      - name: Set up signing profiles
+        script: xcode-project use-profiles
+      - name: Apply Codemagic build number
+        script: |
+          cd ios/App
+          agvtool new-version -all "$BUILD_NUMBER"
+      - name: Build IPA for App Store Connect
+        script: |
+          xcode-project build-ipa \
+            --workspace "$CM_BUILD_DIR/$XCODE_WORKSPACE" \
+            --scheme "$XCODE_SCHEME"
+    artifacts:
+      - build/ios/ipa/*.ipa
+      - /tmp/xcodebuild_logs/*.log
+    publishing:
+      app_store_connect:
+        auth: integration
+        submit_to_testflight: false
+        submit_to_app_store: false
+
+  android-release:
+    name: OmniLingo Android
+    max_build_duration: 45
+    instance_type: linux_x2
+    environment:
+      android_signing:
+        - omnilingo_android
+      vars:
+        PACKAGE_NAME: "com.ikonet.omnilingo"
+      node: 22
+      java: 21
+    scripts:
+      - name: Install npm dependencies
+        script: npm ci
+      - name: Build web app and sync Android project
+        script: |
+          npm run build
+          npx cap sync android
+      - name: Set Android SDK location
+        script: echo "sdk.dir=$ANDROID_SDK_ROOT" > "$CM_BUILD_DIR/android/local.properties"
+      - name: Build release AAB
+        script: |
+          cd android
+          chmod +x ./gradlew
+          ./gradlew bundleRelease
+    artifacts:
+      - android/app/build/outputs/bundle/release/*.aab

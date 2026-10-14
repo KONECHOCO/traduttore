@@ -1,252 +1,259 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { 
-  Mic, 
-  MicOff, 
-  RotateCw, 
-  Volume2, 
-  Download, 
-  Trash2, 
-  Radio, 
-  Users, 
-  Presentation,
-  Play,
-  Square,
-  Sparkles
-} from 'lucide-react';
-import { LANGUAGES, getLanguageByCode } from '../../data/languages';
-import { translateText } from '../../services/translatorService';
+import { Mic, RotateCw, Volume2, VolumeX, Download, Trash2, Radio, Users, Presentation, Play, Square, AlertCircle } from 'lucide-react';
+import { getLanguageByCode, languageName } from '../../data/languages';
+import { translateText, translationErrorMessage } from '../../services/translatorService';
 import { speechService } from '../../services/speechService';
+import { exportTextFile } from '../../services/fileExport';
+import { fmt } from '../../data/translations_i18n';
+import LanguageSelect from '../LanguageSelect';
 
-export default function LiveConversation({ t, soundEnabled, engine, apiKey, glossary }) {
-  const [liveMode, setLiveMode] = useState('split'); // 'split' (Face-to-face) or 'conference'
-  
-  // Person A & Person B settings
-  const [langA, setLangA] = useState('it');
-  const [langB, setLangB] = useState('en');
-  const [speechA, setSpeechA] = useState('');
-  const [transA, setTransA] = useState('');
-  const [speechB, setSpeechB] = useState('');
-  const [transB, setTransB] = useState('');
-  
-  const [isListeningA, setIsListeningA] = useState(false);
-  const [isListeningB, setIsListeningB] = useState(false);
-  const [flippedB, setFlippedB] = useState(true); // Flip 180 deg for table view
+const speechErrorKey = code => (code === 'permission' ? 'MIC_PERMISSION' : code === 'unsupported' ? 'SPEECH_UNSUPPORTED' : 'SPEECH_FAILED');
 
-  // Conference Mode states
-  const [isConferenceActive, setIsConferenceActive] = useState(false);
-  const [confLangSource, setConfLangSource] = useState('it');
-  const [confLangTarget, setConfLangTarget] = useState('en');
-  const [currentConfSubtitle, setCurrentConfSubtitle] = useState('');
-  const [currentConfOriginal, setCurrentConfOriginal] = useState('');
-  const [conferenceTranscript, setConferenceTranscript] = useState([
-    {
-      id: 1,
-      time: '10:00:15',
-      speaker: 'Relatore / Speaker',
-      original: 'Benvenuti alla conferenza internazionale sulle nuove tecnologie.',
-      translated: 'Welcome to the international conference on emerging technologies.'
-    }
-  ]);
+function srtTime(ms) {
+  const total = Math.max(0, Math.round(ms));
+  const h = String(Math.floor(total / 3600000)).padStart(2, '0');
+  const m = String(Math.floor((total % 3600000) / 60000)).padStart(2, '0');
+  const s = String(Math.floor((total % 60000) / 1000)).padStart(2, '0');
+  const msPart = String(total % 1000).padStart(3, '0');
+  return `${h}:${m}:${s},${msPart}`;
+}
 
-  const recognitionRef = useRef(null);
+export default function LiveConversation({ t, uiLang, soundEnabled, glossary }) {
+  const [liveMode, setLiveMode] = useState('split');
+  const [error, setError] = useState(null);
 
-  // Clean up speech recognition on unmount
+  // ---------- Faccia a faccia ----------
+  const [langA, setLangA] = useState(uiLang === 'en' ? 'es' : uiLang);
+  const [langB, setLangB] = useState(uiLang === 'en' ? 'fr' : 'en');
+  const [listening, setListening] = useState(null); // 'A' | 'B' | null
+  const [interim, setInterim] = useState('');
+  const [turns, setTurns] = useState([]);
+  const [autoSpeak, setAutoSpeak] = useState(true);
+  const [flippedB, setFlippedB] = useState(true);
+
+  // ---------- Conferenza ----------
+  const [confActive, setConfActive] = useState(false);
+  const [confSource, setConfSource] = useState(uiLang);
+  const [confTarget, setConfTarget] = useState(uiLang === 'en' ? 'es' : 'en');
+  const [liveOriginal, setLiveOriginal] = useState('');
+  const [liveSubtitle, setLiveSubtitle] = useState('');
+  const [transcript, setTranscript] = useState([]);
+  const confRef = useRef({ active: false, sessionStart: 0, segmentStart: 0 });
+
+  // le lingue si leggono dal ref: la sessione si riavvia da sola e non deve usare valori vecchi
   useEffect(() => {
-    return () => {
-      speechService.stopSpeechRecognition();
-    };
+    confRef.current.source = confSource;
+    confRef.current.target = confTarget;
+  }, [confSource, confTarget]);
+
+  useEffect(() => () => {
+    confRef.current.active = false;
+    speechService.stopListening();
+    speechService.stopSpeaking();
   }, []);
 
-  // Handle Speaker A Voice Dictation
-  const toggleSpeakerA = () => {
-    if (isListeningA) {
-      speechService.stopSpeechRecognition();
-      setIsListeningA(false);
-    } else {
-      if (isListeningB) speechService.stopSpeechRecognition();
-      setIsListeningB(false);
-
-      const srcObj = getLanguageByCode(langA);
-      const rec = speechService.startSpeechRecognition({
-        lang: srcObj.speechCode || 'it-IT',
-        continuous: false,
-        onResult: async ({ finalTranscript, interimTranscript }) => {
-          const spoken = finalTranscript || interimTranscript;
-          if (spoken) {
-            setSpeechA(spoken);
-            if (finalTranscript) {
-              const res = await translateText({ text: spoken, sourceLang: langA, targetLang: langB, glossary, engine });
-              setTransA(res.translatedText);
-              // Auto-speak translation for Person B
-              const tgtObj = getLanguageByCode(langB);
-              speechService.speakText(res.translatedText, tgtObj.voice);
-            }
-          }
-        },
-        onError: () => setIsListeningA(false),
-        onEnd: () => setIsListeningA(false)
-      });
-      if (rec) setIsListeningA(true);
-    }
+  const click = () => {
+    if (soundEnabled) speechService.playClickSound();
   };
 
-  // Handle Speaker B Voice Dictation
-  const toggleSpeakerB = () => {
-    if (isListeningB) {
-      speechService.stopSpeechRecognition();
-      setIsListeningB(false);
-    } else {
-      if (isListeningA) speechService.stopSpeechRecognition();
-      setIsListeningA(false);
-
-      const srcObj = getLanguageByCode(langB);
-      const rec = speechService.startSpeechRecognition({
-        lang: srcObj.speechCode || 'en-US',
-        continuous: false,
-        onResult: async ({ finalTranscript, interimTranscript }) => {
-          const spoken = finalTranscript || interimTranscript;
-          if (spoken) {
-            setSpeechB(spoken);
-            if (finalTranscript) {
-              const res = await translateText({ text: spoken, sourceLang: langB, targetLang: langA, glossary, engine });
-              setTransB(res.translatedText);
-              // Auto-speak translation for Person A
-              const tgtObj = getLanguageByCode(langA);
-              speechService.speakText(res.translatedText, tgtObj.voice);
-            }
-          }
-        },
-        onError: () => setIsListeningB(false),
-        onEnd: () => setIsListeningB(false)
-      });
-      if (rec) setIsListeningB(true);
+  const toggleSpeaker = async (who) => {
+    setError(null);
+    if (listening === who) {
+      await speechService.stopListening();
+      return;
     }
-  };
-
-  // Continuous Conference Mode Handler
-  const toggleConferenceMode = () => {
-    if (isConferenceActive) {
-      speechService.stopSpeechRecognition();
-      setIsConferenceActive(false);
-    } else {
-      const srcObj = getLanguageByCode(confLangSource);
-      const rec = speechService.startSpeechRecognition({
-        lang: srcObj.speechCode || 'it-IT',
-        continuous: true,
-        onResult: async ({ finalTranscript, interimTranscript }) => {
-          const text = finalTranscript || interimTranscript;
-          if (text) {
-            setCurrentConfOriginal(text);
-            const res = await translateText({ text, sourceLang: confLangSource, targetLang: confLangTarget, glossary, engine });
-            setCurrentConfSubtitle(res.translatedText);
-
-            if (finalTranscript) {
-              const newItem = {
-                id: Date.now(),
-                time: new Date().toLocaleTimeString(),
-                speaker: 'Relatore / Presenter',
-                original: finalTranscript,
-                translated: res.translatedText
-              };
-              setConferenceTranscript(prev => [newItem, ...prev]);
-            }
-          }
-        },
-        onError: (err) => {
-          console.warn('Conference recognition error:', err);
-          setIsConferenceActive(false);
-        },
-        onEnd: () => {
-          // If meant to be continuous and user didn't stop it, re-start
-          if (isConferenceActive) {
-            // small recovery
-          }
+    speechService.stopSpeaking();
+    const from = who === 'A' ? langA : langB;
+    const to = who === 'A' ? langB : langA;
+    const started = await speechService.startListening({
+      lang: getLanguageByCode(from).voice,
+      onPartial: text => setInterim(text),
+      onFinal: async text => {
+        setInterim('');
+        const id = Date.now();
+        setTurns(prev => [{ id, who, original: text, translated: '', from, to }, ...prev]);
+        try {
+          const { translatedText } = await translateText({ text, sourceLang: from, targetLang: to, glossary });
+          setTurns(prev => prev.map(turn => (turn.id === id ? { ...turn, translated: translatedText } : turn)));
+          if (autoSpeak) speechService.speakText(translatedText, getLanguageByCode(to).voice);
+        } catch (err) {
+          setTurns(prev => prev.map(turn => (turn.id === id ? { ...turn, translated: '', failed: true } : turn)));
+          setError(translationErrorMessage(err, t));
         }
-      });
-      if (rec) setIsConferenceActive(true);
-    }
-  };
-
-  // Export Transcript as .TXT
-  const exportTranscriptTXT = () => {
-    if (soundEnabled) speechService.playClickSound();
-    const content = conferenceTranscript
-      .map(item => `[${item.time}] ${item.speaker}:\nORIGINALE: ${item.original}\nTRADUZIONE: ${item.translated}\n`)
-      .join('\n');
-
-    const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `trascrizione-conferenza-${new Date().toISOString().slice(0, 10)}.txt`;
-    a.click();
-  };
-
-  // Export Subtitles as .SRT
-  const exportSubtitlesSRT = () => {
-    if (soundEnabled) speechService.playClickSound();
-    let srt = '';
-    conferenceTranscript.forEach((item, idx) => {
-      srt += `${idx + 1}\n00:00:${idx * 3 < 10 ? '0' : ''}${idx * 3},000 --> 00:00:${idx * 3 + 3 < 10 ? '0' : ''}${idx * 3 + 3},000\n${item.translated}\n\n`;
+      },
+      onEnd: () => {
+        setListening(null);
+        setInterim('');
+      },
+      onError: code => {
+        setListening(null);
+        setError(t.errors[speechErrorKey(code)]);
+      }
     });
+    if (started) setListening(who);
+  };
 
-    const blob = new Blob([srt], { type: 'text/plain;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `sottotitoli-conferenza-${new Date().toISOString().slice(0, 10)}.srt`;
-    a.click();
+  // Ultimo messaggio rivolto a ciascuna persona (tradotto nella sua lingua)
+  const lastFor = who => turns.find(turn => turn.who !== who);
+
+  // ---------- Conferenza: ascolto continuo con riavvio automatico ----------
+  const listenConference = async () => {
+    const conf = confRef.current;
+    if (!conf.active) return;
+    const started = await speechService.startListening({
+      lang: getLanguageByCode(conf.source).voice,
+      onPartial: text => {
+        if (!conf.segmentStart) conf.segmentStart = Date.now();
+        setLiveOriginal(text);
+      },
+      onFinal: async text => {
+        const start = (conf.segmentStart || Date.now()) - conf.sessionStart;
+        const end = Date.now() - conf.sessionStart;
+        conf.segmentStart = 0;
+        const id = `${Date.now()}-${Math.random()}`;
+        setTranscript(prev => [...prev, { id, start, end, clock: new Date().toLocaleTimeString(uiLang), original: text, translated: '' }]);
+        try {
+          const { translatedText } = await translateText({ text, sourceLang: conf.source, targetLang: conf.target, glossary });
+          setLiveSubtitle(translatedText);
+          setTranscript(prev => prev.map(line => (line.id === id ? { ...line, translated: translatedText } : line)));
+        } catch (err) {
+          setError(translationErrorMessage(err, t));
+        }
+      },
+      onEnd: () => {
+        // il riconoscimento vocale si ferma dopo ogni frase o pausa: si riparte finché la sessione è attiva
+        if (confRef.current.active) setTimeout(() => confRef.current.active && listenConference(), 250);
+      },
+      onError: code => {
+        if (code === 'failed' && confRef.current.active) return; // errore temporaneo: riprova onEnd
+        confRef.current.active = false;
+        setConfActive(false);
+        setError(t.errors[speechErrorKey(code)]);
+      }
+    });
+    if (!started && !confRef.current.active) setConfActive(false);
+  };
+
+  const toggleConference = async () => {
+    click();
+    setError(null);
+    if (confActive) {
+      confRef.current.active = false;
+      setConfActive(false);
+      await speechService.stopListening();
+      return;
+    }
+    confRef.current = {
+      active: true,
+      sessionStart: confRef.current.sessionStart && transcript.length ? confRef.current.sessionStart : Date.now(),
+      segmentStart: 0,
+      source: confSource,
+      target: confTarget
+    };
+    setConfActive(true);
+    listenConference();
+  };
+
+  const exportTXT = () => {
+    click();
+    const content = transcript
+      .map(line => `[${line.clock}]\n${line.original}\n→ ${line.translated}\n`)
+      .join('\n');
+    exportTextFile(`transcript-${new Date().toISOString().slice(0, 10)}.txt`, content);
+  };
+
+  const exportSRT = () => {
+    click();
+    const srt = transcript
+      .filter(line => line.translated)
+      .map((line, idx) => `${idx + 1}\n${srtTime(line.start)} --> ${srtTime(Math.max(line.end, line.start + 1500))}\n${line.translated}\n`)
+      .join('\n');
+    exportTextFile(`subtitles-${confTarget}-${new Date().toISOString().slice(0, 10)}.srt`, srt, 'application/x-subrip');
+  };
+
+  const renderSpeaker = (who) => {
+    const lang = who === 'A' ? langA : langB;
+    const setLang = who === 'A' ? setLangA : setLangB;
+    const incoming = lastFor(who);
+    const isListening = listening === who;
+    const color = who === 'A' ? '#818cf8' : '#22d3ee';
+    return (
+      <div className={`speaker-card ${who === 'B' && flippedB ? 'flipped' : ''}`}>
+        <div className="speaker-header">
+          <div className="speaker-badge">
+            <span style={{ color }}>● {who === 'A' ? t.liveConv.personA : t.liveConv.personB}</span>
+            <LanguageSelect value={lang} onChange={setLang} uiLang={uiLang} ariaLabel={t.liveConv.language} />
+          </div>
+          <button
+            className="icon-btn"
+            onClick={() => incoming?.translated && speechService.speakText(incoming.translated, getLanguageByCode(lang).voice)}
+            disabled={!incoming?.translated}
+            aria-label={t.textStudio.listenVoice}
+          >
+            <Volume2 size={18} />
+          </button>
+        </div>
+
+        <div className="speaker-speech-bubble" dir="auto">
+          {isListening ? (
+            <span style={{ color: 'var(--text-muted)' }}>{interim || t.liveConv.listening}</span>
+          ) : incoming ? (
+            <div>
+              <div style={{ fontSize: '0.8rem', color: 'var(--text-dim)', marginBottom: '0.2rem' }}>
+                {fmt(t.liveConv.translatedFrom, { lang: languageName(incoming.from, uiLang, true) })}
+              </div>
+              <span style={{ color, fontWeight: 600 }}>{incoming.translated || (incoming.failed ? '—' : '…')}</span>
+              <div style={{ fontSize: '0.8rem', color: 'var(--text-dim)', marginTop: '0.3rem' }}>“{incoming.original}”</div>
+            </div>
+          ) : (
+            <span style={{ color: 'var(--text-dim)', fontSize: '1rem' }}>{fmt(t.liveConv.tapToSpeak, { lang: languageName(lang, uiLang, true) })}</span>
+          )}
+        </div>
+
+        <button
+          className={`mic-action-btn ${isListening ? 'active' : ''}`}
+          onClick={() => toggleSpeaker(who)}
+          aria-label={isListening ? t.liveConv.stopListening : t.liveConv.pressToSpeak}
+          id={`mic-speaker-${who.toLowerCase()}`}
+        >
+          <Mic size={26} />
+        </button>
+      </div>
+    );
   };
 
   return (
     <div className="live-conversation-container">
-      {/* Mode Selector & Action Header */}
       <div className="live-header-bar">
         <div className="mode-toggle-pill">
-          <button 
-            className={`mode-toggle-btn ${liveMode === 'split' ? 'active' : ''}`}
-            onClick={() => {
-              if (soundEnabled) speechService.playClickSound();
-              setLiveMode('split');
-            }}
-            id="btn-mode-split"
-          >
+          <button className={`mode-toggle-btn ${liveMode === 'split' ? 'active' : ''}`} onClick={() => { click(); setLiveMode('split'); }} id="btn-mode-split">
             <Users size={16} />
             {t.liveConv.modeSplit}
           </button>
-
-          <button 
-            className={`mode-toggle-btn ${liveMode === 'conference' ? 'active' : ''}`}
-            onClick={() => {
-              if (soundEnabled) speechService.playClickSound();
-              setLiveMode('conference');
-            }}
-            id="btn-mode-conference"
-          >
+          <button className={`mode-toggle-btn ${liveMode === 'conference' ? 'active' : ''}`} onClick={() => { click(); setLiveMode('conference'); }} id="btn-mode-conference">
             <Presentation size={16} />
             {t.liveConv.modeConf}
           </button>
         </div>
 
         {liveMode === 'split' ? (
-          <button 
-            className="btn-secondary"
-            onClick={() => {
-              if (soundEnabled) speechService.playClickSound();
-              setFlippedB(!flippedB);
-            }}
-            title={t.liveConv.flipScreen}
-          >
-            <RotateCw size={16} />
-            {t.liveConv.flipScreen}
-          </button>
+          <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+            <button className="btn-secondary btn-small" onClick={() => { click(); setAutoSpeak(!autoSpeak); }}>
+              {autoSpeak ? <Volume2 size={15} /> : <VolumeX size={15} />}
+              {autoSpeak ? t.liveConv.autoSpeakOn : t.liveConv.autoSpeakOff}
+            </button>
+            <button className="btn-secondary btn-small" onClick={() => { click(); setFlippedB(!flippedB); }}>
+              <RotateCw size={15} />
+              {t.liveConv.flipScreen}
+            </button>
+          </div>
         ) : (
-          <div style={{ display: 'flex', gap: '0.6rem' }}>
-            <button className="btn-secondary" onClick={exportSubtitlesSRT} title="Scarica sottotitoli SRT">
+          <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+            <button className="btn-secondary btn-small" onClick={exportSRT} disabled={!transcript.length}>
               <Download size={15} />
               {t.liveConv.exportSubtitles}
             </button>
-            <button className="btn-secondary" onClick={exportTranscriptTXT} title="Scarica testo trascrizione">
+            <button className="btn-secondary btn-small" onClick={exportTXT} disabled={!transcript.length}>
               <Download size={15} />
               {t.liveConv.exportText}
             </button>
@@ -254,212 +261,105 @@ export default function LiveConversation({ t, soundEnabled, engine, apiKey, glos
         )}
       </div>
 
-      {/* SUB-MODE 1: FACE TO FACE SPLIT SCREEN */}
-      {liveMode === 'split' && (
-        <div className="split-face-container">
-          {/* SPEAKER B (Interlocutore, can be flipped 180° for table view) */}
-          <div className={`speaker-card ${flippedB ? 'flipped' : ''}`}>
-            <div className="speaker-header">
-              <div className="speaker-badge">
-                <span style={{ color: '#06b6d4' }}>● {t.liveConv.personB}</span>
-                <select 
-                  className="lang-selector-select" 
-                  value={langB} 
-                  onChange={e => setLangB(e.target.value)}
-                >
-                  {LANGUAGES.map(l => (
-                    <option key={l.code} value={l.code}>{l.flag} {l.name}</option>
-                  ))}
-                </select>
-              </div>
-
-              <div style={{ display: 'flex', gap: '0.4rem' }}>
-                <button 
-                  className="icon-btn" 
-                  onClick={() => speechService.speakText(transB || speechB, getLanguageByCode(langB).voice)}
-                  disabled={!speechB && !transB}
-                >
-                  <Volume2 size={18} />
-                </button>
-              </div>
-            </div>
-
-            <div className="speaker-speech-bubble">
-              {transA ? (
-                <div>
-                  <div style={{ fontSize: '0.9rem', color: 'var(--text-dim)', marginBottom: '0.2rem' }}>
-                    Tradotto da {getLanguageByCode(langA).name}:
-                  </div>
-                  <span style={{ color: '#38bdf8', fontWeight: 600 }}>{transA}</span>
-                </div>
-              ) : speechB ? (
-                <span>"{speechB}"</span>
-              ) : (
-                <span style={{ color: 'var(--text-dim)', fontSize: '1rem' }}>
-                  In attesa che l'interlocutore parli...
-                </span>
-              )}
-            </div>
-
-            <button 
-              className={`mic-action-btn ${isListeningB ? 'active' : ''}`}
-              onClick={toggleSpeakerB}
-              title={isListeningB ? t.liveConv.stopListening : t.liveConv.pressToSpeak}
-              id="mic-speaker-b"
-            >
-              <Mic size={26} />
-            </button>
-          </div>
-
-          {/* SPEAKER A (Utente Principale) */}
-          <div className="speaker-card">
-            <div className="speaker-header">
-              <div className="speaker-badge">
-                <span style={{ color: '#6366f1' }}>● {t.liveConv.personA}</span>
-                <select 
-                  className="lang-selector-select" 
-                  value={langA} 
-                  onChange={e => setLangA(e.target.value)}
-                >
-                  {LANGUAGES.map(l => (
-                    <option key={l.code} value={l.code}>{l.flag} {l.name}</option>
-                  ))}
-                </select>
-              </div>
-
-              <div style={{ display: 'flex', gap: '0.4rem' }}>
-                <button 
-                  className="icon-btn" 
-                  onClick={() => speechService.speakText(transA || speechA, getLanguageByCode(langA).voice)}
-                  disabled={!speechA && !transA}
-                >
-                  <Volume2 size={18} />
-                </button>
-              </div>
-            </div>
-
-            <div className="speaker-speech-bubble">
-              {transB ? (
-                <div>
-                  <div style={{ fontSize: '0.9rem', color: 'var(--text-dim)', marginBottom: '0.2rem' }}>
-                    Tradotto da {getLanguageByCode(langB).name}:
-                  </div>
-                  <span style={{ color: '#818cf8', fontWeight: 600 }}>{transB}</span>
-                </div>
-              ) : speechA ? (
-                <span>"{speechA}"</span>
-              ) : (
-                <span style={{ color: 'var(--text-dim)', fontSize: '1rem' }}>
-                  Tocca il microfono e parla in {getLanguageByCode(langA).name}...
-                </span>
-              )}
-            </div>
-
-            <button 
-              className={`mic-action-btn ${isListeningA ? 'active' : ''}`}
-              onClick={toggleSpeakerA}
-              title={isListeningA ? t.liveConv.stopListening : t.liveConv.pressToSpeak}
-              id="mic-speaker-a"
-            >
-              <Mic size={26} />
-            </button>
-          </div>
+      {error && (
+        <div className="alert-box">
+          <AlertCircle size={16} /> {error}
         </div>
       )}
 
-      {/* SUB-MODE 2: LIVE CONFERENCE & TELEPROMPTER SUBTITLES */}
-      {liveMode === 'conference' && (
-        <div>
-          {/* Conference Controls Bar */}
-          <div className="glass-panel" style={{ padding: '1.25rem', marginBottom: '1.5rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '1rem' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
-              <div>
-                <span style={{ fontSize: '0.8rem', color: 'var(--text-dim)', display: 'block' }}>Lingua Relatore:</span>
-                <select 
-                  className="lang-selector-select" 
-                  value={confLangSource} 
-                  onChange={e => setConfLangSource(e.target.value)}
-                >
-                  {LANGUAGES.map(l => (
-                    <option key={l.code} value={l.code}>{l.flag} {l.name}</option>
-                  ))}
-                </select>
+      {liveMode === 'split' && (
+        <>
+          <div className="split-face-container">
+            {renderSpeaker('B')}
+            {renderSpeaker('A')}
+          </div>
+          {turns.length > 0 && (
+            <div className="glass-panel" style={{ padding: '1.25rem', marginTop: '1.25rem' }}>
+              <div className="panel-title" style={{ justifyContent: 'space-between' }}>
+                <h4>{t.liveConv.conversationLog} ({turns.length})</h4>
+                <button className="icon-btn" onClick={() => setTurns([])} aria-label={t.liveConv.clearHistory}>
+                  <Trash2 size={16} />
+                </button>
               </div>
-
-              <div>
-                <span style={{ fontSize: '0.8rem', color: 'var(--text-dim)', display: 'block' }}>Lingua Sottotitoli:</span>
-                <select 
-                  className="lang-selector-select" 
-                  value={confLangTarget} 
-                  onChange={e => setConfLangTarget(e.target.value)}
-                >
-                  {LANGUAGES.map(l => (
-                    <option key={l.code} value={l.code}>{l.flag} {l.name}</option>
-                  ))}
-                </select>
+              <div className="rolling-transcript">
+                {turns.map(turn => (
+                  <div key={turn.id} className="transcript-line" dir="auto">
+                    <div style={{ flex: 1 }}>
+                      <strong style={{ fontSize: '0.8rem', color: turn.who === 'A' ? '#818cf8' : '#22d3ee' }}>
+                        {turn.who === 'A' ? t.liveConv.personA : t.liveConv.personB}
+                      </strong>
+                      <div style={{ fontSize: '0.95rem' }}>{turn.translated || '…'}</div>
+                      <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>{turn.original}</div>
+                    </div>
+                  </div>
+                ))}
               </div>
             </div>
+          )}
+        </>
+      )}
 
+      {liveMode === 'conference' && (
+        <div>
+          <div className="glass-panel conf-controls">
+            <div style={{ display: 'flex', alignItems: 'flex-end', gap: '1rem', flexWrap: 'wrap' }}>
+              <label className="field-label">
+                {t.liveConv.speakerLang}
+                <LanguageSelect value={confSource} onChange={setConfSource} uiLang={uiLang} />
+              </label>
+              <label className="field-label">
+                {t.liveConv.subtitleLang}
+                <LanguageSelect value={confTarget} onChange={setConfTarget} uiLang={uiLang} />
+              </label>
+            </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-              <button 
-                className={`btn-primary ${isConferenceActive ? 'recording' : ''}`}
-                style={{ background: isConferenceActive ? '#ef4444' : 'var(--accent-gradient)' }}
-                onClick={toggleConferenceMode}
+              <button
+                className="btn-primary"
+                style={{ background: confActive ? 'var(--danger)' : 'var(--accent-gradient)' }}
+                onClick={toggleConference}
                 id="btn-toggle-conference"
               >
-                {isConferenceActive ? <Square size={18} /> : <Play size={18} />}
-                {isConferenceActive ? t.liveConv.stopListening : t.liveConv.startListening}
+                {confActive ? <Square size={18} /> : <Play size={18} />}
+                {confActive ? t.liveConv.stopListening : t.liveConv.startListening}
               </button>
-
-              <button 
-                className="icon-btn" 
-                onClick={() => setConferenceTranscript([])} 
-                title={t.liveConv.clearHistory}
+              <button
+                className="icon-btn"
+                onClick={() => {
+                  setTranscript([]);
+                  setLiveSubtitle('');
+                  setLiveOriginal('');
+                  confRef.current.sessionStart = Date.now();
+                }}
+                aria-label={t.liveConv.clearHistory}
               >
                 <Trash2 size={18} />
               </button>
             </div>
           </div>
 
-          {/* Big Teleprompter Screen */}
           <div className="conference-teleprompter">
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', color: isConferenceActive ? '#10b981' : '#64748b', fontSize: '0.85rem', marginBottom: '0.75rem' }}>
-              <Radio size={16} className={isConferenceActive ? 'pulse' : ''} />
-              <span>{isConferenceActive ? 'LIVE BROADCASTING SOTTOTITOLI ATTIVI' : 'IN PAUSA — PREMI AVVIA ASCOLTO'}</span>
+            <div className={`live-indicator ${confActive ? 'on' : ''}`}>
+              <Radio size={16} />
+              <span>{confActive ? t.liveConv.liveOn : t.liveConv.liveOff}</span>
             </div>
-
-            <div className="teleprompter-text">
-              {currentConfSubtitle || '« I sottotitoli tradotti in diretta appariranno qui a caratteri giganti »'}
-            </div>
-
-            {currentConfOriginal && (
-              <div className="teleprompter-original">
-                Originale: "{currentConfOriginal}"
-              </div>
-            )}
+            <div className="teleprompter-text" dir="auto">{liveSubtitle || t.liveConv.subtitlesPlaceholder}</div>
+            {liveOriginal && <div className="teleprompter-original" dir="auto">{liveOriginal}</div>}
           </div>
+          <p className="muted-text" style={{ fontSize: '0.8rem', marginBottom: '1rem' }}>{t.liveConv.conferenceHint}</p>
 
-          {/* Rolling Transcript Log */}
           <div className="glass-panel" style={{ padding: '1.25rem' }}>
-            <h4 style={{ fontSize: '1rem', marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <div className="panel-title">
               <Presentation size={18} style={{ color: 'var(--primary)' }} />
-              Verbale Completo & Trascrizione Cronologica ({conferenceTranscript.length})
-            </h4>
-
+              <h4>{t.liveConv.transcriptTitle} ({transcript.length})</h4>
+            </div>
             <div className="rolling-transcript">
-              {conferenceTranscript.map(item => (
-                <div key={item.id} className="transcript-line">
+              {transcript.length === 0 && <div className="empty-state">{t.liveConv.transcriptEmpty}</div>}
+              {[...transcript].reverse().map(line => (
+                <div key={line.id} className="transcript-line" dir="auto">
                   <div style={{ flex: 1 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', marginBottom: '0.25rem' }}>
-                      <span style={{ fontSize: '0.75rem', color: 'var(--text-dim)', fontFamily: 'var(--font-mono)' }}>{item.time}</span>
-                      <strong style={{ fontSize: '0.85rem', color: '#818cf8' }}>{item.speaker}</strong>
-                    </div>
-                    <div style={{ fontSize: '0.95rem', color: 'var(--text-main)', fontWeight: 500 }}>
-                      {item.translated}
-                    </div>
-                    <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.2rem' }}>
-                      {item.original}
-                    </div>
+                    <span style={{ fontSize: '0.75rem', color: 'var(--text-dim)', fontFamily: 'var(--font-mono)' }}>{line.clock}</span>
+                    <div style={{ fontSize: '0.95rem', fontWeight: 500 }}>{line.translated || '…'}</div>
+                    <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.2rem' }}>{line.original}</div>
                   </div>
                 </div>
               ))}

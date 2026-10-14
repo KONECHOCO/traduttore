@@ -1,354 +1,224 @@
-// Advanced multi-engine translation coordinator with Tone, Nuance, Glossary, and Offline fallback
+// Motore di traduzione.
+// - App iOS/Android: Google ML Kit on-device (gratuito, offline dopo il download del pacchetto lingua,
+//   uso commerciale consentito). Riconoscimento lingua con ML Kit Language Identification.
+// - Browser (solo sviluppo/anteprima): MyMemory, con i suoi limiti (500 byte per richiesta, quota giornaliera).
+// Nessuna traduzione inventata: se il motore fallisce viene lanciato un errore e l'interfaccia lo mostra.
 
-import { FALSE_FRIENDS } from '../data/learningData';
+import { Capacitor } from '@capacitor/core';
+import { Translation } from '@capacitor-mlkit/translation';
+import { LanguageIdentification } from '@capacitor-mlkit/language-identification';
+import { LANGUAGES } from '../data/languages';
 
-// Cache for instant response and offline resilience
-const translationCache = new Map();
+export const isNative = Capacitor.isNativePlatform();
 
-// Local intelligent lexicon for high-frequency phrases & instant offline capability
-const OFFLINE_LEXICON = {
-  'it_en': {
-    'ciao': 'hello',
-    'buongiorno': 'good morning',
-    'buonasera': 'good evening',
-    'grazie': 'thank you',
-    'grazie mille': 'thank you very much',
-    'per favore': 'please',
-    'prego': 'you are welcome',
-    'come stai': 'how are you',
-    'come va': 'how is it going',
-    'piacere di conoscerti': 'pleased to meet you',
-    'benvenuto': 'welcome',
-    'arrivederci': 'goodbye',
-    'a presto': 'see you soon',
-    'mi chiamo': 'my name is',
-    'sono un traduttore professionista': 'I am a professional translator',
-    'questo è un test': 'this is a test',
-    'conferenza in diretta': 'live conference',
-    'sottotitoli in tempo reale': 'real-time subtitles',
-    'traduzione documenti': 'document translation',
-    'buon lavoro': 'have a good work session'
-  },
-  'en_it': {
-    'hello': 'ciao',
-    'good morning': 'buongiorno',
-    'good evening': 'buonasera',
-    'thank you': 'grazie',
-    'thank you very much': 'grazie mille',
-    'please': 'per favore',
-    'you are welcome': 'prego',
-    'how are you': 'come stai',
-    'how is it going': 'come va',
-    'pleased to meet you': 'piacere di conoscerti',
-    'welcome': 'benvenuto',
-    'goodbye': 'arrivederci',
-    'see you soon': 'a presto',
-    'my name is': 'mi chiamo',
-    'live conference': 'conferenza in diretta',
-    'real-time subtitles': 'sottotitoli in tempo reale'
+const SUPPORTED = new Set(LANGUAGES.map(l => l.code));
+const cache = new Map();
+const CACHE_LIMIT = 300;
+
+export class TranslationError extends Error {
+  constructor(code, message) {
+    super(message || code);
+    this.code = code;
   }
-};
+}
 
-/**
- * Translates text with multi-engine fallback and post-processing
- */
-export async function translateText({
-  text,
-  sourceLang = 'auto',
-  targetLang = 'en',
-  tone = 'standard',
-  glossary = [],
-  apiKey = null,
-  engine = 'neural'
-}) {
-  if (!text || !text.trim()) {
-    return {
-      translatedText: '',
-      detectedLang: sourceLang,
-      alternatives: [],
-      nuances: [],
-      falseFriends: [],
-      phonetic: ''
-    };
-  }
-
-  const cleanText = text.trim();
-  const cacheKey = `${cleanText}_${sourceLang}_${targetLang}_${tone}`;
-
-  // Check custom glossary overrides first
-  let preProcessedText = cleanText;
-  if (glossary && glossary.length > 0) {
-    glossary.forEach(item => {
-      if (item.source && item.target) {
-        const regex = new RegExp(`\\b${escapeRegExp(item.source)}\\b`, 'gi');
-        preProcessedText = preProcessedText.replace(regex, item.target);
-      }
-    });
-  }
-
-  let translated = '';
-  let detected = sourceLang;
-
-  // If user provided a custom API Key (OpenAI / Gemini)
-  if (apiKey && engine === 'custom') {
+/** Riconosce la lingua di un testo. Restituisce il codice (es. 'it') o null se incerto/non supportato. */
+export async function detectLanguage(text) {
+  const sample = (text || '').trim().slice(0, 500);
+  if (sample.length < 3) return null;
+  if (isNative) {
     try {
-      translated = await translateWithCustomAI(preProcessedText, sourceLang, targetLang, tone, apiKey);
-    } catch (e) {
-      console.warn('Custom AI API failed, falling back to neural cloud:', e);
+      const { language } = await LanguageIdentification.identifyLanguage({ text: sample, confidenceThreshold: 0.4 });
+      const code = normalizeCode(language);
+      return SUPPORTED.has(code) ? code : null;
+    } catch {
+      return null;
     }
   }
+  return null; // sul web il riconoscimento avviene insieme alla traduzione (MyMemory "Autodetect")
+}
 
-  // 1. Try Free Neural Cloud API (MyMemory)
-  if (!translated) {
-    try {
-      const src = sourceLang === 'auto' ? 'it' : sourceLang;
-      const url = `https://api.mymemory.translated.net/get?q=${encodeURIComponent(preProcessedText)}&langpair=${src}|${targetLang}`;
-      const res = await fetch(url);
-      if (res.ok) {
-        const data = await res.json();
-        if (data && data.responseData && data.responseData.translatedText) {
-          translated = data.responseData.translatedText;
-          detected = data.matches && data.matches[0] && data.matches[0]['created-by'] ? src : src;
+function normalizeCode(lang) {
+  if (!lang || lang === 'und') return null;
+  const base = lang.toLowerCase().split('-')[0];
+  if (base === 'fil') return 'tl';
+  if (base === 'nb' || base === 'nn') return 'no';
+  if (base === 'iw') return 'he';
+  return base;
+}
+
+// ---------- Pacchetti lingua (solo app) ----------
+export async function getDownloadedModels() {
+  if (!isNative) return [];
+  const { languages } = await Translation.getDownloadedModels();
+  return languages;
+}
+
+export async function downloadModel(lang) {
+  if (!isNative) return;
+  await Translation.downloadModel({ language: lang });
+}
+
+export async function deleteModel(lang) {
+  if (!isNative || lang === 'en') return; // l'inglese è il modello base di ML Kit
+  await Translation.deleteDownloadedModel({ language: lang });
+}
+
+async function missingModels(...langs) {
+  const downloaded = new Set(await getDownloadedModels());
+  return langs.filter(l => l && l !== 'en' && !downloaded.has(l));
+}
+
+// ---------- Traduzione ----------
+/**
+ * Traduce un testo.
+ * @returns {Promise<{translatedText: string, detectedLang: string|null}>}
+ * @param onStatus callback opzionale: 'downloading' quando serve scaricare un pacchetto lingua
+ */
+export async function translateText({ text, sourceLang = 'auto', targetLang = 'en', glossary = [], onStatus }) {
+  const clean = (text || '').trim();
+  if (!clean) return { translatedText: '', detectedLang: null };
+
+  let source = sourceLang;
+  if (source === 'auto' && isNative) {
+    source = await detectLanguage(clean);
+    if (!source) throw new TranslationError('DETECT_FAILED');
+  }
+
+  if (source === targetLang) {
+    // lingua rilevata uguale a quella di arrivo: lo si dice invece di restituire lo stesso testo
+    if (sourceLang === 'auto') throw new TranslationError('SAME_LANGUAGE');
+    return { translatedText: clean, detectedLang: source };
+  }
+
+  const cacheKey = `${source}|${targetLang}|${clean}`;
+  let result = cache.get(cacheKey);
+  if (!result) {
+    result = isNative
+      ? await translateNative(clean, source, targetLang, onStatus)
+      : await translateWeb(clean, source, targetLang);
+    if (cache.size > CACHE_LIMIT) cache.delete(cache.keys().next().value);
+    cache.set(cacheKey, result);
+  }
+
+  const translatedText = await applyGlossary(result.translatedText, clean, result.detectedLang || source, targetLang, glossary, onStatus);
+  return { translatedText, detectedLang: result.detectedLang || (source === 'auto' ? null : source) };
+}
+
+async function translateNative(text, source, target, onStatus) {
+  const missing = await missingModels(source, target).catch(() => []);
+  if (missing.length && onStatus) onStatus('downloading', missing);
+  try {
+    // Paragrafo per paragrafo: ML Kit lavora meglio su frasi brevi e così si conservano gli a capo
+    const parts = text.split(/(\n+)/);
+    const out = [];
+    for (const part of parts) {
+      if (!part.trim() || /^\n+$/.test(part)) {
+        out.push(part);
+        continue;
+      }
+      const { text: translated } = await Translation.translate({ text: part, sourceLanguage: source, targetLanguage: target });
+      out.push(translated);
+    }
+    if (onStatus) onStatus('done');
+    return { translatedText: out.join(''), detectedLang: source };
+  } catch (err) {
+    if (onStatus) onStatus('done');
+    const msg = String(err?.message || err);
+    if (missing.length) throw new TranslationError('MODEL_DOWNLOAD_FAILED', msg);
+    throw new TranslationError('ENGINE_FAILED', msg);
+  }
+}
+
+// MyMemory accetta al massimo 500 byte per richiesta: si divide per frasi
+function chunkText(text, maxBytes = 450) {
+  const enc = new TextEncoder();
+  const sentences = text.match(/[^.!?。！？\n]+[.!?。！？]*\s*|\n+/g) || [text];
+  const chunks = [];
+  let current = '';
+  for (const s of sentences) {
+    if (enc.encode(current + s).length > maxBytes && current) {
+      chunks.push(current);
+      current = '';
+    }
+    if (enc.encode(s).length > maxBytes) {
+      // frase lunghissima: si taglia per parole
+      for (const word of s.split(/(\s+)/)) {
+        if (enc.encode(current + word).length > maxBytes && current) {
+          chunks.push(current);
+          current = '';
         }
+        current += word;
       }
-    } catch (err) {
-      console.warn('Cloud translation service unreachable, trying local lexicon:', err);
-    }
-  }
-
-  // 2. Offline / Local fallback if cloud translation was empty or failed
-  if (!translated) {
-    const pairKey = `${sourceLang}_${targetLang}`;
-    const reverseKey = `${targetLang}_${sourceLang}`;
-    const lower = cleanText.toLowerCase();
-
-    if (OFFLINE_LEXICON[pairKey] && OFFLINE_LEXICON[pairKey][lower]) {
-      translated = OFFLINE_LEXICON[pairKey][lower];
-    } else if (OFFLINE_LEXICON[reverseKey] && OFFLINE_LEXICON[reverseKey][lower]) {
-      translated = OFFLINE_LEXICON[reverseKey][lower];
     } else {
-      // Intelligent rule-based fallback
-      translated = mockIntelligentTranslate(cleanText, sourceLang, targetLang);
+      current += s;
     }
   }
+  if (current) chunks.push(current);
+  return chunks;
+}
 
-  // Apply Tone / Register transformations
-  translated = applyToneTransformation(translated, targetLang, tone);
-
-  // Generate Alternative translations
-  const alternatives = generateAlternativeTranslations(translated, targetLang, tone);
-
-  // Detect False Friends
-  const detectedFalseFriends = detectFalseFriends(cleanText, translated, sourceLang, targetLang);
-
-  // Generate word-level nuances and synonyms
-  const nuances = generateWordNuances(translated, targetLang);
-
-  // Generate phonetic approximation (IPA)
-  const phonetic = generatePhoneticIPA(translated, targetLang);
-
-  const result = {
-    translatedText: translated,
-    detectedLang: detected === 'auto' ? 'it' : detected,
-    alternatives,
-    nuances,
-    falseFriends: detectedFalseFriends,
-    phonetic
-  };
-
-  translationCache.set(cacheKey, result);
-  return result;
+async function translateWeb(text, source, target) {
+  const chunks = chunkText(text);
+  const out = [];
+  let detected = source === 'auto' ? null : source;
+  for (const chunk of chunks) {
+    if (!chunk.trim()) {
+      out.push(chunk);
+      continue;
+    }
+    const src = source === 'auto' ? 'Autodetect' : source;
+    const url = `https://api.mymemory.translated.net/get?q=${encodeURIComponent(chunk.trim())}&langpair=${src}|${target}`;
+    let data;
+    try {
+      const res = await fetch(url);
+      data = await res.json();
+    } catch {
+      throw new TranslationError('NETWORK');
+    }
+    if (data?.quotaFinished) throw new TranslationError('QUOTA');
+    if (/DISTINCT LANGUAGES/i.test(data?.responseDetails || '')) throw new TranslationError('SAME_LANGUAGE');
+    if (Number(data?.responseStatus) !== 200 || !data?.responseData?.translatedText) {
+      throw new TranslationError('ENGINE_FAILED', data?.responseDetails);
+    }
+    if (!detected && data.responseData.detectedLanguage) detected = normalizeCode(data.responseData.detectedLanguage);
+    const lead = chunk.match(/^\s*/)[0];
+    const trail = chunk.match(/\s*$/)[0];
+    out.push(lead + data.responseData.translatedText + trail);
+  }
+  return { translatedText: out.join(''), detectedLang: detected };
 }
 
 /**
- * Applies stylistic tone modifications
+ * Glossario: per ogni termine presente nel testo originale si traduce il termine da solo con lo stesso
+ * motore e, nel risultato, si sostituisce quella resa con quella scelta dall'utente.
  */
-function applyToneTransformation(text, targetLang, tone) {
-  if (tone === 'standard' || !text) return text;
-
-  let result = text;
-
-  if (targetLang === 'it') {
-    if (tone === 'formal') {
-      result = result
-        .replace(/\btu\b/gi, 'Lei')
-        .replace(/\bti\b/gi, 'La')
-        .replace(/\bte\b/gi, 'Lei')
-        .replace(/\bpuoi\b/gi, 'potrebbe cortesemente')
-        .replace(/\bvuoi\b/gi, 'desidera')
-        .replace(/\bgrazie\b/gi, 'La ringrazio cordialmente');
-    } else if (tone === 'informal') {
-      result = result
-        .replace(/\bLei\b/g, 'tu')
-        .replace(/\bLa ringrazio\b/gi, 'grazie mille')
-        .replace(/\bCordiali saluti\b/gi, 'Un abbraccio');
-    } else if (tone === 'academic') {
-      result = result
-        .replace(/\bè importante\b/gi, 'risulta fondamentale constatare che')
-        .replace(/\bmostra\b/gi, 'evidenzia inconfutabilmente');
-    }
-  } else if (targetLang === 'en') {
-    if (tone === 'formal') {
-      result = result
-        .replace(/\bcan you\b/gi, 'could you kindly')
-        .replace(/\bi want\b/gi, 'I would appreciate')
-        .replace(/\bthanks\b/gi, 'thank you very much')
-        .replace(/\bhey\b/gi, 'Dear')
-        .replace(/\bbye\b/gi, 'Sincerely,');
-    } else if (tone === 'informal') {
-      result = result
-        .replace(/\bI would like to inform you\b/gi, 'Just letting you know')
-        .replace(/\bDear sir\b/gi, 'Hey there')
-        .replace(/\bSincerely\b/gi, 'Cheers');
-    } else if (tone === 'academic') {
-      result = result
-        .replace(/\bshows\b/gi, 'demonstrates empirically')
-        .replace(/\ba lot of\b/gi, 'a substantial multitude of')
-        .replace(/\bthink\b/gi, 'hypothesize');
-    }
-  } else if (targetLang === 'es') {
-    if (tone === 'formal') {
-      result = result
-        .replace(/\btú\b/gi, 'usted')
-        .replace(/\bte\b/gi, 'le')
-        .replace(/\bpuedes\b/gi, 'podría usted');
+async function applyGlossary(translated, original, source, target, glossary, onStatus) {
+  if (!glossary?.length || !source || source === 'auto') return translated;
+  let out = translated;
+  for (const item of glossary) {
+    if (!item?.source || !item?.target) continue;
+    if (!new RegExp(`(^|[^\\p{L}])${escapeRegExp(item.source)}($|[^\\p{L}])`, 'iu').test(original)) continue;
+    try {
+      const { translatedText: auto } = await translateText({ text: item.source, sourceLang: source, targetLang: target, onStatus });
+      if (auto && auto.toLowerCase() !== item.target.toLowerCase()) {
+        out = out.replace(new RegExp(escapeRegExp(auto), 'giu'), item.target);
+      }
+      // se il termine è rimasto invariato (es. nome di marca) lo si sostituisce direttamente
+      out = out.replace(new RegExp(`(^|[^\\p{L}])${escapeRegExp(item.source)}(?=$|[^\\p{L}])`, 'giu'), `$1${item.target}`);
+    } catch {
+      // il glossario non deve far fallire la traduzione principale
     }
   }
-
-  return result;
-}
-
-/**
- * Detects known false friends
- */
-function detectFalseFriends(sourceText, targetText, srcLang, tgtLang) {
-  const alerts = [];
-  const combined = `${sourceText} ${targetText}`.toLowerCase();
-
-  FALSE_FRIENDS.forEach(ff => {
-    const wordLower = ff.word.toLowerCase();
-    if (combined.includes(wordLower)) {
-      alerts.push(ff);
-    }
-  });
-
-  return alerts;
-}
-
-/**
- * Generates synonyms and grammatical analysis for words in the translation
- */
-export function generateWordNuances(translatedText, targetLang) {
-  if (!translatedText) return [];
-  const words = translatedText.replace(/[.,/#!$%^&*;:{}=\-_`~()?"']/g, '').split(/\s+/).filter(w => w.length > 2);
-  const uniqueWords = [...new Set(words)].slice(0, 8); // analyze top words
-
-  return uniqueWords.map(word => {
-    return {
-      word,
-      role: inferPartOfSpeech(word, targetLang),
-      synonyms: getWordSynonyms(word, targetLang),
-      definition: getWordDefinition(word, targetLang)
-    };
-  });
-}
-
-function inferPartOfSpeech(word, lang) {
-  const lower = word.toLowerCase();
-  if (lower.endsWith('ly') || lower.endsWith('mente')) return 'Avverbio';
-  if (lower.endsWith('ing') || lower.endsWith('are') || lower.endsWith('ere') || lower.endsWith('ire') || lower.endsWith('ed')) return 'Verbo';
-  if (lower.endsWith('tion') || lower.endsWith('zione') || lower.endsWith('ità') || lower.endsWith('ness')) return 'Sostantivo';
-  return 'Termine / Aggettivo';
-}
-
-function getWordSynonyms(word, lang) {
-  const lower = word.toLowerCase();
-  const SYNONYM_MAP = {
-    'important': ['crucial', 'essential', 'paramount', 'significant'],
-    'importante': ['cruciale', 'fondamentale', 'essenziale', 'rilevante'],
-    'professional': ['expert', 'qualified', 'proficient', 'competent'],
-    'professionale': ['qualificato', 'esperto', 'competente', 'specializzato'],
-    'great': ['excellent', 'superb', 'outstanding', 'wonderful'],
-    'grande': ['notevole', 'eccellente', 'straordinario', 'ragguardevole'],
-    'help': ['assist', 'support', 'aid', 'facilitate'],
-    'aiuto': ['supporto', 'assistenza', 'ausilio', 'collaborazione'],
-    'conference': ['symposium', 'convention', 'summit', 'assembly'],
-    'conferenza': ['simposio', 'convegno', 'assemblea', 'summit'],
-    'meeting': ['gathering', 'assembly', 'conference', 'session'],
-    'riunione': ['incontro', 'seduta', 'conclave', 'briefing']
-  };
-
-  return SYNONYM_MAP[lower] || [`${word} (variante)`, `sinonimo contestuale`];
-}
-
-function getWordDefinition(word, lang) {
-  return `Indica il concetto espresso nel contesto della frase tradotta (${word}).`;
-}
-
-/**
- * Generates alternative sentence translations
- */
-function generateAlternativeTranslations(text, targetLang, tone) {
-  if (!text) return [];
-  const alts = [];
-
-  if (targetLang === 'en') {
-    alts.push(`Alternative phrasing: "${text.replace(/\b(good|fine)\b/gi, 'splendid')}"`);
-    alts.push(`Concise version: "${text.replace(/\b(in order to|with the aim of)\b/gi, 'to')}"`);
-  } else if (targetLang === 'it') {
-    alts.push(`Opzione stilistica: "${text.replace(/\b(molto)\b/gi, 'estremamente')}"`);
-    alts.push(`Forma sintetica: "${text.replace(/\b(con lo scopo di)\b/gi, 'per')}"`);
-  } else {
-    alts.push(`Alternativa fluida: ${text}`);
-  }
-
-  return alts;
-}
-
-/**
- * Approximates International Phonetic Alphabet (IPA) representation
- */
-function generatePhoneticIPA(text, targetLang) {
-  if (!text) return '';
-  // Lightweight phonetic approximation for the user
-  const clean = text.trim().slice(0, 60);
-  return `/${clean.toLowerCase().replace(/ph/g, 'f').replace(/th/g, 'θ').replace(/ch/g, 'tʃ')}/`;
-}
-
-/**
- * Intelligent client-side rule-based translator for offline resilience
- */
-function mockIntelligentTranslate(text, sourceLang, targetLang) {
-  const dictionary = {
-    'it': {
-      'buongiorno': 'good morning',
-      'grazie': 'thank you',
-      'benvenuti': 'welcome',
-      'traduzione': 'translation',
-      'lingua': 'language',
-      'conferenza': 'conference'
-    },
-    'en': {
-      'good morning': 'buongiorno',
-      'thank you': 'grazie',
-      'welcome': 'benvenuti',
-      'translation': 'traduzione',
-      'language': 'lingua',
-      'conference': 'conferenza'
-    }
-  };
-
-  return `[${targetLang.toUpperCase()}] ${text}`;
-}
-
-/**
- * Custom AI Translation if user provided OpenAI/Gemini Key
- */
-async function translateWithCustomAI(text, sourceLang, targetLang, tone, apiKey) {
-  // If user provides custom endpoint
-  return text;
+  return out;
 }
 
 function escapeRegExp(string) {
   return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/** Messaggio leggibile per un errore di traduzione, nella lingua dell'interfaccia. */
+export function translationErrorMessage(err, t) {
+  const code = err?.code || 'ENGINE_FAILED';
+  return t.errors[code] || t.errors.ENGINE_FAILED;
 }

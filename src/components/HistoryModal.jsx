@@ -1,109 +1,79 @@
 import React, { useState } from 'react';
-import { X, Trash2, Clock, Search, ArrowRight, CornerDownLeft } from 'lucide-react';
+import { X, Trash2, Clock, Search } from 'lucide-react';
 import { speechService } from '../services/speechService';
+import { languageName } from '../data/languages';
 
-export default function HistoryModal({ 
-  isOpen, 
-  onClose, 
-  history, 
-  setHistory, 
-  onSelectHistoryItem, 
-  soundEnabled 
-}) {
+export default function HistoryModal({ isOpen, onClose, history, setHistory, onSelectHistoryItem, soundEnabled, t, uiLang }) {
   const [searchQuery, setSearchQuery] = useState('');
 
   if (!isOpen) return null;
 
-  const filteredHistory = history.filter(item => 
-    item.sourceText.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    item.translatedText.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  const q = searchQuery.toLowerCase();
+  const filtered = history.filter(item => item.sourceText.toLowerCase().includes(q) || item.translatedText.toLowerCase().includes(q));
 
-  const clearAllHistory = () => {
+  const click = () => {
     if (soundEnabled) speechService.playClickSound();
-    setHistory([]);
-    localStorage.removeItem('omni_history');
-  };
-
-  const deleteSingle = (indexToDelete) => {
-    if (soundEnabled) speechService.playClickSound();
-    const updated = history.filter((_, idx) => idx !== indexToDelete);
-    setHistory(updated);
-    localStorage.setItem('omni_history', JSON.stringify(updated));
   };
 
   return (
     <div className="modal-overlay" onClick={onClose}>
-      <div className="modal-content" onClick={e => e.stopPropagation()}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+      <div className="modal-content" onClick={e => e.stopPropagation()} role="dialog" aria-modal="true" aria-label={t.history.title}>
+        <div className="modal-header">
+          <div className="panel-title">
             <Clock size={22} style={{ color: 'var(--primary)' }} />
-            <h3 style={{ fontSize: '1.25rem' }}>Cronologia Traduzioni</h3>
+            <h3>{t.history.title}</h3>
           </div>
-          <button className="icon-btn" onClick={onClose}><X size={20} /></button>
+          <button className="icon-btn" onClick={onClose} aria-label={t.common.close}><X size={20} /></button>
         </div>
 
-        {/* Search Bar */}
         <div style={{ position: 'relative', marginBottom: '1.25rem' }}>
-          <Search size={16} style={{ position: 'absolute', left: '12px', top: '13px', color: 'var(--text-dim)' }} />
-          <input 
-            type="text" 
-            placeholder="Cerca nella cronologia..." 
-            value={searchQuery}
-            onChange={e => setSearchQuery(e.target.value)}
-            style={{ width: '100%', padding: '0.65rem 1rem 0.65rem 2.4rem', borderRadius: '10px', background: 'var(--bg-app)', border: '1px solid var(--border-subtle)', color: 'var(--text-main)', outline: 'none' }}
-          />
+          <Search size={16} style={{ position: 'absolute', insetInlineStart: '12px', top: '13px', color: 'var(--text-dim)' }} />
+          <input type="text" className="text-input" placeholder={t.history.search} value={searchQuery} onChange={e => setSearchQuery(e.target.value)} style={{ paddingInlineStart: '2.4rem', width: '100%' }} />
         </div>
 
-        {/* History List */}
-        <div style={{ maxHeight: '360px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-          {filteredHistory.length === 0 ? (
-            <div style={{ textAlign: 'center', padding: '2.5rem', color: 'var(--text-dim)', fontSize: '0.9rem' }}>
-              Nessuna traduzione registrata in cronologia.
-            </div>
+        <div style={{ maxHeight: '55vh', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+          {filtered.length === 0 ? (
+            <div className="empty-state">{t.history.empty}</div>
           ) : (
-            filteredHistory.map((item, idx) => (
-              <div 
-                key={idx} 
-                style={{ padding: '0.9rem', background: 'var(--bg-app)', borderRadius: '12px', border: '1px solid var(--border-subtle)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem', cursor: 'pointer', transition: 'border-color 0.2s ease' }}
+            filtered.map(item => (
+              <div
+                key={`${item.timestamp}-${item.sourceText}`}
+                className="list-row clickable"
                 onClick={() => {
-                  if (soundEnabled) speechService.playClickSound();
+                  click();
                   onSelectHistoryItem(item);
                   onClose();
                 }}
               >
-                <div style={{ flex: 1 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.75rem', color: 'var(--text-dim)', marginBottom: '0.2rem' }}>
-                    <span>{item.timestamp}</span>
-                    <span>•</span>
-                    <strong style={{ color: '#818cf8', textTransform: 'uppercase' }}>{item.sourceLang} ➔ {item.targetLang}</strong>
+                <div style={{ flex: 1, minWidth: 0 }} dir="auto">
+                  <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)', marginBottom: '0.2rem' }}>
+                    {typeof item.timestamp === 'number' ? new Date(item.timestamp).toLocaleString(uiLang) : item.timestamp} ·{' '}
+                    <strong style={{ color: '#818cf8' }}>{languageName(item.sourceLang, uiLang)} → {languageName(item.targetLang, uiLang)}</strong>
                   </div>
-                  <div style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>{item.sourceText}</div>
-                  <div style={{ fontSize: '0.95rem', color: 'var(--text-main)', fontWeight: 600, marginTop: '0.2rem' }}>{item.translatedText}</div>
+                  <div className="clamp-2" style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>{item.sourceText}</div>
+                  <div className="clamp-2" style={{ fontSize: '0.95rem', fontWeight: 600, marginTop: '0.2rem' }}>{item.translatedText}</div>
                 </div>
-
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
-                  <button 
-                    className="icon-btn" 
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      deleteSingle(idx);
-                    }}
-                    title="Rimuovi voce"
-                  >
-                    <Trash2 size={16} style={{ color: '#ef4444' }} />
-                  </button>
-                </div>
+                <button
+                  className="icon-btn"
+                  onClick={e => {
+                    e.stopPropagation();
+                    click();
+                    setHistory(history.filter(h => h !== item));
+                  }}
+                  aria-label={t.common.delete}
+                >
+                  <Trash2 size={16} style={{ color: 'var(--danger)' }} />
+                </button>
               </div>
             ))
           )}
         </div>
 
         {history.length > 0 && (
-          <div style={{ marginTop: '1.25rem', textAlign: 'right' }}>
-            <button className="btn-secondary" onClick={clearAllHistory} style={{ color: '#ef4444', borderColor: 'rgba(239, 68, 68, 0.3)' }}>
+          <div style={{ marginTop: '1.25rem', textAlign: 'end' }}>
+            <button className="btn-secondary btn-small danger" onClick={() => { click(); setHistory([]); }}>
               <Trash2 size={15} />
-              Cancella Tutta la Cronologia
+              {t.history.clearAll}
             </button>
           </div>
         )}

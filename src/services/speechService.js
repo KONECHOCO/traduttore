@@ -1,13 +1,23 @@
-// Speech recognition (STT), Speech synthesis (TTS) & Web Audio tactile sounds
+// Voce: sintesi (TTS), riconoscimento (STT) e suoni dell'interfaccia.
+// - App: plugin nativi (@capacitor-community/text-to-speech e speech-recognition): le WebView di
+//   iOS e Android non offrono in modo affidabile le Web Speech API.
+// - Browser: Web Speech API (riconoscimento solo su Chrome/Edge/Safari).
+
+import { Capacitor } from '@capacitor/core';
+import { TextToSpeech } from '@capacitor-community/text-to-speech';
+import { SpeechRecognition } from '@capacitor-community/speech-recognition';
+
+const native = Capacitor.isNativePlatform();
 
 class SpeechService {
   constructor() {
     this.audioCtx = null;
-    this.recognition = null;
-    this.isListening = false;
+    this.webRecognition = null;
+    this.nativeHandles = [];
+    this.session = 0;
   }
 
-  // Initialize Web Audio Context on user interaction
+  // ---------- Suoni tattili (Web Audio) ----------
   initAudio() {
     if (!this.audioCtx && (window.AudioContext || window.webkitAudioContext)) {
       const AudioContextClass = window.AudioContext || window.webkitAudioContext;
@@ -18,171 +28,218 @@ class SpeechService {
     }
   }
 
-  // Tactile sound effect: subtle pleasant click
-  playClickSound() {
-    try {
-      this.initAudio();
-      if (!this.audioCtx) return;
-      const osc = this.audioCtx.createOscillator();
-      const gain = this.audioCtx.createGain();
-      osc.type = 'sine';
-      osc.frequency.setValueAtTime(600, this.audioCtx.currentTime);
-      osc.frequency.exponentialRampToValueAtTime(200, this.audioCtx.currentTime + 0.04);
-      gain.gain.setValueAtTime(0.08, this.audioCtx.currentTime);
-      gain.gain.exponentialRampToValueAtTime(0.001, this.audioCtx.currentTime + 0.04);
-      osc.connect(gain);
-      gain.connect(this.audioCtx.destination);
-      osc.start();
-      osc.stop(this.audioCtx.currentTime + 0.05);
-    } catch (e) {
-      // Audio autoplay policy fail-safe
-    }
-  }
-
-  // Sound effect: pleasant translation ready chime
-  playSuccessChime() {
+  tone(steps, type = 'sine', volume = 0.07) {
     try {
       this.initAudio();
       if (!this.audioCtx) return;
       const now = this.audioCtx.currentTime;
-      [523.25, 659.25, 783.99].forEach((freq, idx) => {
+      steps.forEach(([freq, start, duration, endFreq]) => {
         const osc = this.audioCtx.createOscillator();
         const gain = this.audioCtx.createGain();
-        osc.type = 'sine';
-        osc.frequency.setValueAtTime(freq, now + idx * 0.08);
-        gain.gain.setValueAtTime(0.06, now + idx * 0.08);
-        gain.gain.exponentialRampToValueAtTime(0.001, now + idx * 0.08 + 0.2);
+        osc.type = type;
+        osc.frequency.setValueAtTime(freq, now + start);
+        if (endFreq) osc.frequency.exponentialRampToValueAtTime(endFreq, now + start + duration);
+        gain.gain.setValueAtTime(volume, now + start);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + start + duration);
         osc.connect(gain);
         gain.connect(this.audioCtx.destination);
-        osc.start(now + idx * 0.08);
-        osc.stop(now + idx * 0.08 + 0.22);
+        osc.start(now + start);
+        osc.stop(now + start + duration + 0.02);
       });
-    } catch (e) {}
+    } catch {
+      // politica di autoplay del browser
+    }
   }
 
-  // Sound effect: mic listening started tone
+  playClickSound() {
+    this.tone([[600, 0, 0.04, 200]]);
+  }
+
+  playSuccessChime() {
+    this.tone([[523.25, 0, 0.2], [659.25, 0.08, 0.2], [783.99, 0.16, 0.2]], 'sine', 0.05);
+  }
+
   playMicStartTone() {
-    try {
-      this.initAudio();
-      if (!this.audioCtx) return;
-      const now = this.audioCtx.currentTime;
-      const osc = this.audioCtx.createOscillator();
-      const gain = this.audioCtx.createGain();
-      osc.type = 'triangle';
-      osc.frequency.setValueAtTime(440, now);
-      osc.frequency.exponentialRampToValueAtTime(880, now + 0.12);
-      gain.gain.setValueAtTime(0.08, now);
-      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.15);
-      osc.connect(gain);
-      gain.connect(this.audioCtx.destination);
-      osc.start(now);
-      osc.stop(now + 0.16);
-    } catch (e) {}
+    this.tone([[440, 0, 0.15, 880]], 'triangle');
   }
 
-  /**
-   * Speak text out loud using browser SpeechSynthesis
-   */
-  speakText(text, langCode = 'it-IT', rate = 1.0, pitch = 1.0) {
-    if (!('speechSynthesis' in window)) {
-      console.warn('Speech synthesis not supported in this browser.');
+  // ---------- Sintesi vocale ----------
+  async speakText(text, langCode = 'en-US', rate = 1.0) {
+    if (!text || !text.trim()) return;
+    if (native) {
+      try {
+        await TextToSpeech.stop();
+        await TextToSpeech.speak({ text, lang: langCode, rate, pitch: 1.0, volume: 1.0, category: 'playback' });
+      } catch (err) {
+        console.warn('TTS non disponibile per', langCode, err);
+      }
       return;
     }
-
-    window.speechSynthesis.cancel(); // stop any currently playing voice
-
-    if (!text || !text.trim()) return;
-
+    if (!('speechSynthesis' in window)) return;
+    window.speechSynthesis.cancel();
     const utterance = new SpeechSynthesisUtterance(text);
     utterance.lang = langCode;
     utterance.rate = rate;
-    utterance.pitch = pitch;
-
-    // Pick best matching voice
     const voices = window.speechSynthesis.getVoices();
-    const matchedVoice = voices.find(v => v.lang.toLowerCase().startsWith(langCode.slice(0, 2).toLowerCase()));
-    if (matchedVoice) {
-      utterance.voice = matchedVoice;
-    }
-
+    const exact = voices.find(v => v.lang.toLowerCase() === langCode.toLowerCase());
+    const sameLang = voices.find(v => v.lang.toLowerCase().startsWith(langCode.slice(0, 2).toLowerCase()));
+    if (exact || sameLang) utterance.voice = exact || sameLang;
     window.speechSynthesis.speak(utterance);
   }
 
   stopSpeaking() {
-    if ('speechSynthesis' in window) {
-      window.speechSynthesis.cancel();
-    }
+    if (native) TextToSpeech.stop().catch(() => {});
+    else if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+  }
+
+  // ---------- Riconoscimento vocale ----------
+  isRecognitionSupported() {
+    return native || !!(window.SpeechRecognition || window.webkitSpeechRecognition);
   }
 
   /**
-   * Start listening using Web Speech API
+   * Avvia l'ascolto di una frase.
+   * onPartial(text): testo provvisorio; onFinal(text): frase conclusa; onEnd(): ascolto terminato;
+   * onError(code): 'unsupported' | 'permission' | 'failed'.
    */
-  startSpeechRecognition({
-    lang = 'it-IT',
-    continuous = false,
-    onResult,
-    onError,
-    onEnd
-  }) {
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  async startListening({ lang = 'en-US', onPartial, onFinal, onEnd, onError }) {
+    await this.stopListening();
+    const session = ++this.session;
+    this.playMicStartTone();
 
-    if (!SpeechRecognition) {
-      if (onError) onError(new Error('Il riconoscimento vocale non è supportato da questo browser. Usa Chrome, Edge o Safari.'));
-      return null;
+    if (native) {
+      try {
+        const { available } = await SpeechRecognition.available();
+        if (!available) {
+          onError?.('unsupported');
+          return false;
+        }
+        let perm = await SpeechRecognition.checkPermissions();
+        if (perm.speechRecognition !== 'granted') perm = await SpeechRecognition.requestPermissions();
+        if (perm.speechRecognition !== 'granted') {
+          onError?.('permission');
+          return false;
+        }
+        let last = '';
+        let finished = false;
+        const finish = () => {
+          if (finished || session !== this.session) return;
+          finished = true;
+          if (last.trim()) onFinal?.(last.trim());
+          onEnd?.();
+          this.removeNativeListeners();
+        };
+        this.nativeHandles.push(
+          await SpeechRecognition.addListener('partialResults', data => {
+            if (session !== this.session) return;
+            last = data.matches?.[0] || last;
+            onPartial?.(last);
+          }),
+          await SpeechRecognition.addListener('listeningState', data => {
+            // Android segnala la fine del parlato prima di consegnare il risultato definitivo
+            if (data.status === 'stopped') setTimeout(finish, 400);
+          })
+        );
+        await SpeechRecognition.start({ language: lang, maxResults: 1, partialResults: true, popup: false });
+        return true;
+      } catch (err) {
+        console.warn('Riconoscimento vocale fallito', err);
+        this.removeNativeListeners();
+        onError?.('failed');
+        return false;
+      }
     }
 
+    const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!Recognition) {
+      onError?.('unsupported');
+      return false;
+    }
+    const rec = new Recognition();
+    rec.lang = lang;
+    rec.continuous = false;
+    rec.interimResults = true;
+    let last = '';
+    rec.onresult = event => {
+      let interim = '';
+      for (let i = event.resultIndex; i < event.results.length; ++i) {
+        const text = event.results[i][0].transcript;
+        if (event.results[i].isFinal) {
+          last = '';
+          onFinal?.(text.trim());
+        } else {
+          interim += text;
+        }
+      }
+      if (interim) {
+        last = interim;
+        onPartial?.(interim);
+      }
+    };
+    rec.onerror = event => {
+      if (event.error === 'not-allowed' || event.error === 'service-not-allowed') onError?.('permission');
+      else if (event.error !== 'no-speech' && event.error !== 'aborted') onError?.('failed');
+    };
+    rec.onend = () => {
+      if (session !== this.session) return;
+      if (last.trim()) onFinal?.(last.trim());
+      this.webRecognition = null;
+      onEnd?.();
+    };
+    this.webRecognition = rec;
     try {
-      this.playMicStartTone();
-      this.recognition = new SpeechRecognition();
-      this.recognition.lang = lang;
-      this.recognition.continuous = continuous;
-      this.recognition.interimResults = true;
-      this.isListening = true;
-
-      this.recognition.onresult = (event) => {
-        let interimTranscript = '';
-        let finalTranscript = '';
-
-        for (let i = event.resultIndex; i < event.results.length; ++i) {
-          if (event.results[i].isFinal) {
-            finalTranscript += event.results[i][0].transcript;
-          } else {
-            interimTranscript += event.results[i][0].transcript;
-          }
-        }
-
-        if (onResult) {
-          onResult({ finalTranscript, interimTranscript });
-        }
-      };
-
-      this.recognition.onerror = (event) => {
-        this.isListening = false;
-        if (onError) onError(event);
-      };
-
-      this.recognition.onend = () => {
-        this.isListening = false;
-        if (onEnd) onEnd();
-      };
-
-      this.recognition.start();
-      return this.recognition;
-    } catch (err) {
-      this.isListening = false;
-      if (onError) onError(err);
-      return null;
+      rec.start();
+      return true;
+    } catch {
+      onError?.('failed');
+      return false;
     }
   }
 
-  stopSpeechRecognition() {
-    if (this.recognition && this.isListening) {
+  removeNativeListeners() {
+    this.nativeHandles.forEach(h => h.remove());
+    this.nativeHandles = [];
+  }
+
+  /** Ferma l'ascolto: la frase in corso viene comunque consegnata con onFinal. */
+  async stopListening() {
+    if (native) {
       try {
-        this.recognition.stop();
-      } catch (e) {}
-      this.isListening = false;
+        const { listening } = await SpeechRecognition.isListening();
+        if (listening) await SpeechRecognition.stop();
+      } catch {
+        // già fermo
+      }
+      return;
+    }
+    if (this.webRecognition) {
+      try {
+        this.webRecognition.stop();
+      } catch {
+        // già fermo
+      }
     }
   }
 }
 
 export const speechService = new SpeechService();
+
+/** Somiglianza 0–100 tra due frasi (distanza di Levenshtein su lettere, ignorando punteggiatura e maiuscole). */
+export function textSimilarity(a, b) {
+  const norm = s => (s || '').toLowerCase().normalize('NFKC').replace(/[\p{P}\p{S}\s]+/gu, '');
+  const x = norm(a);
+  const y = norm(b);
+  if (!x && !y) return 100;
+  if (!x || !y) return 0;
+  const prev = Array.from({ length: y.length + 1 }, (_, i) => i);
+  for (let i = 1; i <= x.length; i++) {
+    let diag = prev[0];
+    prev[0] = i;
+    for (let j = 1; j <= y.length; j++) {
+      const tmp = prev[j];
+      prev[j] = Math.min(prev[j] + 1, prev[j - 1] + 1, diag + (x[i - 1] === y[j - 1] ? 0 : 1));
+      diag = tmp;
+    }
+  }
+  return Math.round((1 - prev[y.length] / Math.max(x.length, y.length)) * 100);
+}

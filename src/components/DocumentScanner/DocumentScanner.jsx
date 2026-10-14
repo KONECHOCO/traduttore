@@ -1,409 +1,385 @@
 import React, { useState, useRef } from 'react';
-import { 
-  FileText, 
-  Camera, 
-  Upload, 
-  Image, 
-  Download, 
-  Check, 
-  Loader2, 
-  Volume2, 
-  Copy, 
-  Video, 
-  X,
-  Sparkles
-} from 'lucide-react';
-import { LANGUAGES, getLanguageByCode } from '../../data/languages';
-import { extractTextFromFile, performOCR } from '../../services/ocrService';
-import { translateText } from '../../services/translatorService';
+import { FileText, Camera as CameraIcon, Upload, Image, Download, Loader2, Volume2, Copy, Check, AlertCircle, WifiOff } from 'lucide-react';
+import { Capacitor } from '@capacitor/core';
+import { Camera, CameraResultType, CameraSource } from '@capacitor/camera';
+import { getLanguageByCode } from '../../data/languages';
+import { extractTextFromFile, performOCR, ocrIsOffline } from '../../services/ocrService';
+import { translateText, translationErrorMessage } from '../../services/translatorService';
 import { speechService } from '../../services/speechService';
+import { exportTextFile, safeFileName } from '../../services/fileExport';
+import { trackAdAction } from '../../services/monetization';
+import { fmt } from '../../data/translations_i18n';
+import LanguageSelect from '../LanguageSelect';
 
-export default function DocumentScanner({ t, soundEnabled, engine, apiKey, glossary }) {
-  const [activeSubTab, setActiveSubTab] = useState('doc'); // 'doc' or 'photo'
+const native = Capacitor.isNativePlatform();
 
-  // Document states
+// Divide il documento in blocchi di paragrafi da ~1500 caratteri per mostrare l'avanzamento
+function splitIntoBlocks(text, max = 1500) {
+  const paragraphs = text.split(/\n{2,}/);
+  const blocks = [];
+  let current = '';
+  for (const p of paragraphs) {
+    if (current && current.length + p.length > max) {
+      blocks.push(current);
+      current = '';
+    }
+    current = current ? `${current}\n\n${p}` : p;
+  }
+  if (current) blocks.push(current);
+  return blocks;
+}
+
+function CopyButton({ text, t }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      className="icon-btn"
+      disabled={!text}
+      aria-label={t.textStudio.copy}
+      onClick={async () => {
+        try {
+          await navigator.clipboard.writeText(text);
+          setCopied(true);
+          setTimeout(() => setCopied(false), 1500);
+        } catch {
+          // appunti non disponibili
+        }
+      }}
+    >
+      {copied ? <Check size={18} style={{ color: 'var(--success)' }} /> : <Copy size={18} />}
+    </button>
+  );
+}
+
+export default function DocumentScanner({ t, uiLang, soundEnabled, glossary }) {
+  const [activeSubTab, setActiveSubTab] = useState('doc');
+  const [error, setError] = useState(null);
+
+  // Documento
   const [docFile, setDocFile] = useState(null);
+  const [docInfo, setDocInfo] = useState(null);
   const [docOriginalText, setDocOriginalText] = useState('');
   const [docTranslatedText, setDocTranslatedText] = useState('');
   const [docSourceLang, setDocSourceLang] = useState('auto');
-  const [docTargetLang, setDocTargetLang] = useState('it');
-  const [isProcessingDoc, setIsProcessingDoc] = useState(false);
+  const [docTargetLang, setDocTargetLang] = useState(uiLang);
+  const [docProgress, setDocProgress] = useState(null); // {done, total} | 'extracting'
+  const cancelRef = useRef(false);
 
-  // Photo & OCR states
+  // Foto
   const [ocrImage, setOcrImage] = useState(null);
-  const [ocrProgress, setOcrProgress] = useState(0);
-  const [isOcrRunning, setIsOcrRunning] = useState(false);
+  const [ocrProgress, setOcrProgress] = useState(null);
   const [ocrExtractedText, setOcrExtractedText] = useState('');
   const [ocrTranslatedText, setOcrTranslatedText] = useState('');
   const [ocrSourceLang, setOcrSourceLang] = useState('auto');
-  const [ocrTargetLang, setOcrTargetLang] = useState('it');
+  const [ocrTargetLang, setOcrTargetLang] = useState(uiLang);
+  const [isTranslatingOcr, setIsTranslatingOcr] = useState(false);
 
-  // Camera video states
-  const [isCameraActive, setIsCameraActive] = useState(false);
-  const videoRef = useRef(null);
-  const streamRef = useRef(null);
-
-  // Document file upload handler
-  const handleDocFileUpload = async (e) => {
-    const file = e.target.files && e.target.files[0];
-    if (!file) return;
-
+  const click = () => {
     if (soundEnabled) speechService.playClickSound();
-    setDocFile(file);
-    setIsProcessingDoc(true);
+  };
 
+  // ---------- Documenti ----------
+  const translateDocument = async (text, source = docSourceLang, target = docTargetLang) => {
+    const blocks = splitIntoBlocks(text);
+    cancelRef.current = false;
+    setDocTranslatedText('');
+    setDocProgress({ done: 0, total: blocks.length });
+    const out = [];
+    let detected = source;
     try {
-      const extracted = await extractTextFromFile(file);
-      setDocOriginalText(extracted);
-
-      // Translate document
-      const result = await translateText({
-        text: extracted.slice(0, 4000), // translate initial chunk
-        sourceLang: docSourceLang,
-        targetLang: docTargetLang,
-        glossary,
-        engine
-      });
-
-      setDocTranslatedText(result.translatedText);
+      for (let i = 0; i < blocks.length; i++) {
+        if (cancelRef.current) break;
+        const res = await translateText({ text: blocks[i], sourceLang: detected, targetLang: target, glossary });
+        // la lingua rilevata sul primo blocco vale per tutto il documento
+        if (detected === 'auto' && res.detectedLang) detected = res.detectedLang;
+        out.push(res.translatedText);
+        setDocTranslatedText(out.join('\n\n'));
+        setDocProgress({ done: i + 1, total: blocks.length });
+      }
       if (soundEnabled) speechService.playSuccessChime();
     } catch (err) {
-      console.error('File extraction error:', err);
-      alert('Errore durante l\'estrazione del file.');
+      setError(translationErrorMessage(err, t));
     } finally {
-      setIsProcessingDoc(false);
+      setDocProgress(null);
     }
   };
 
-  // Image upload handler
-  const handleImageUpload = (e) => {
-    const file = e.target.files && e.target.files[0];
+  const handleDocFileUpload = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
     if (!file) return;
-    processImageSource(file);
+    click();
+    setError(null);
+    setDocFile(file);
+    setDocOriginalText('');
+    setDocTranslatedText('');
+    setDocProgress('extracting');
+    try {
+      const { text, pages, truncated } = await extractTextFromFile(file);
+      setDocInfo({ pages, truncated });
+      setDocOriginalText(text);
+      trackAdAction();
+      await translateDocument(text);
+    } catch (err) {
+      console.error('File extraction error:', err);
+      setError(t.errors[`DOC_${err.code}`] || t.errors.DOC_FAILED);
+      setDocProgress(null);
+    }
   };
 
-  // Run OCR on image file or dataURL
-  const processImageSource = async (imageSrc) => {
-    if (soundEnabled) speechService.playClickSound();
-    setIsOcrRunning(true);
-    setOcrProgress(5);
+  const downloadTranslatedDoc = () => {
+    click();
+    const base = docFile ? docFile.name.replace(/\.[^/.]+$/, '') : 'document';
+    exportTextFile(`${safeFileName(base)}_${docTargetLang}.txt`, docTranslatedText);
+  };
+
+  // ---------- Foto ----------
+  const runOcr = async (image) => {
+    setError(null);
+    setOcrImage(image.webPath);
     setOcrExtractedText('');
     setOcrTranslatedText('');
-
-    if (typeof imageSrc === 'object') {
-      const url = URL.createObjectURL(imageSrc);
-      setOcrImage(url);
-    } else {
-      setOcrImage(imageSrc);
-    }
-
+    setOcrProgress(5);
     try {
-      const ocrResult = await performOCR(imageSrc, ocrSourceLang, (prog) => {
-        setOcrProgress(prog);
-      });
-
-      setOcrExtractedText(ocrResult.text);
-
-      if (ocrResult.text) {
-        // Translate the extracted text
-        const transResult = await translateText({
-          text: ocrResult.text,
-          sourceLang: ocrSourceLang,
-          targetLang: ocrTargetLang,
-          glossary,
-          engine
-        });
-        setOcrTranslatedText(transResult.translatedText);
-        if (soundEnabled) speechService.playSuccessChime();
+      const { text } = await performOCR(image, ocrSourceLang, p => setOcrProgress(p));
+      setOcrProgress(null);
+      if (!text) {
+        setError(t.errors.OCR_EMPTY);
+        return;
       }
-    } catch (error) {
-      console.error('OCR Error:', error);
-      alert('Errore durante il riconoscimento del testo nella foto.');
-    } finally {
-      setIsOcrRunning(false);
-    }
-  };
-
-  // Live Camera Activation
-  const startCamera = async () => {
-    if (soundEnabled) speechService.playClickSound();
-    setIsCameraActive(true);
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } }
-      });
-      streamRef.current = stream;
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-      }
+      setOcrExtractedText(text);
+      trackAdAction();
+      await translateOcr(text);
     } catch (err) {
-      console.error('Camera access error:', err);
-      alert('Impossibile accedere alla fotocamera. Verifica i permessi del browser.');
-      setIsCameraActive(false);
+      console.error('OCR Error:', err);
+      setOcrProgress(null);
+      setError(t.errors.OCR_FAILED);
     }
   };
 
-  // Snap photo from video stream
-  const captureCameraFrame = () => {
-    if (!videoRef.current) return;
-    if (soundEnabled) speechService.playClickSound();
-
-    const canvas = document.createElement('canvas');
-    canvas.width = videoRef.current.videoWidth || 640;
-    canvas.height = videoRef.current.videoHeight || 480;
-    const ctx = canvas.getContext('2d');
-    ctx.drawImage(videoRef.current, 0, 0, canvas.width, canvas.height);
-
-    const dataUrl = canvas.toDataURL('image/jpeg', 0.9);
-
-    // Stop camera stream
-    closeCamera();
-
-    // Process the captured photo
-    processImageSource(dataUrl);
-  };
-
-  // Close Camera
-  const closeCamera = () => {
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach(track => track.stop());
-      streamRef.current = null;
+  const translateOcr = async (text = ocrExtractedText, target = ocrTargetLang) => {
+    if (!text.trim()) return;
+    setIsTranslatingOcr(true);
+    try {
+      const res = await translateText({ text, sourceLang: ocrSourceLang, targetLang: target, glossary });
+      setOcrTranslatedText(res.translatedText);
+      if (soundEnabled) speechService.playSuccessChime();
+    } catch (err) {
+      setError(translationErrorMessage(err, t));
+    } finally {
+      setIsTranslatingOcr(false);
     }
-    setIsCameraActive(false);
   };
 
-  // Download translated document
-  const downloadTranslatedDoc = () => {
-    if (!docTranslatedText) return;
-    if (soundEnabled) speechService.playClickSound();
-    const blob = new Blob([docTranslatedText], { type: 'text/plain;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `tradotto-${docFile ? docFile.name.replace(/\.[^/.]+$/, '') : 'documento'}.txt`;
-    a.click();
+  const pickNativePhoto = async (source) => {
+    click();
+    try {
+      const photo = await Camera.getPhoto({ source, resultType: CameraResultType.Uri, quality: 90, correctOrientation: true });
+      await runOcr({ path: photo.path, webPath: photo.webPath });
+    } catch (err) {
+      // annullato dall'utente o permesso negato
+      if (!/cancel/i.test(String(err?.message || err))) setError(t.errors.CAMERA_PERMISSION);
+    }
   };
+
+  const handleImageInput = (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    click();
+    runOcr({ webPath: URL.createObjectURL(file) });
+  };
+
+  const busyDoc = docProgress !== null;
 
   return (
     <div className="doc-scanner-container">
-      {/* Sub tabs: Document vs Photo OCR */}
       <div className="live-header-bar">
         <div className="mode-toggle-pill">
-          <button 
-            className={`mode-toggle-btn ${activeSubTab === 'doc' ? 'active' : ''}`}
-            onClick={() => {
-              if (soundEnabled) speechService.playClickSound();
-              setActiveSubTab('doc');
-            }}
-            id="subtab-doc-btn"
-          >
+          <button className={`mode-toggle-btn ${activeSubTab === 'doc' ? 'active' : ''}`} onClick={() => { click(); setActiveSubTab('doc'); setError(null); }} id="subtab-doc-btn">
             <FileText size={16} />
             {t.docsOcr.tabDoc}
           </button>
-
-          <button 
-            className={`mode-toggle-btn ${activeSubTab === 'photo' ? 'active' : ''}`}
-            onClick={() => {
-              if (soundEnabled) speechService.playClickSound();
-              setActiveSubTab('photo');
-            }}
-            id="subtab-ocr-btn"
-          >
-            <Camera size={16} />
+          <button className={`mode-toggle-btn ${activeSubTab === 'photo' ? 'active' : ''}`} onClick={() => { click(); setActiveSubTab('photo'); setError(null); }} id="subtab-ocr-btn">
+            <CameraIcon size={16} />
             {t.docsOcr.tabOcr}
           </button>
         </div>
       </div>
 
-      {/* SUBTAB 1: DOCUMENT FILE TRANSLATOR */}
-      {activeSubTab === 'doc' && (
-        <div>
-          {/* Upload Dropzone */}
-          <div className="dropzone-box" onClick={() => document.getElementById('doc-file-input').click()}>
-            <input 
-              id="doc-file-input" 
-              type="file" 
-              accept=".pdf,.txt,.md,.json,.csv,.srt,.docx" 
-              style={{ display: 'none' }} 
-              onChange={handleDocFileUpload} 
-            />
-            <Upload size={38} style={{ color: 'var(--primary)', margin: '0 auto 1rem auto' }} />
-            <h3 style={{ fontSize: '1.2rem', marginBottom: '0.4rem' }}>{t.docsOcr.uploadPrompt}</h3>
-            <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>{t.docsOcr.supportedFormats}</p>
-            {docFile && (
-              <div style={{ marginTop: '1rem', padding: '0.4rem 1rem', background: 'rgba(99, 102, 241, 0.2)', borderRadius: '20px', display: 'inline-flex', alignItems: 'center', gap: '0.5rem', color: '#818cf8', fontWeight: 600, fontSize: '0.85rem' }}>
-                <FileText size={16} />
-                {docFile.name} ({(docFile.size / 1024).toFixed(1)} KB)
-              </div>
-            )}
-          </div>
-
-          {/* Language Selection & Action Bar */}
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', margin: '1.5rem 0', flexWrap: 'wrap', gap: '1rem' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-              <div>
-                <span style={{ fontSize: '0.8rem', color: 'var(--text-dim)', display: 'block' }}>Lingua Destinazione:</span>
-                <select 
-                  className="lang-selector-select" 
-                  value={docTargetLang} 
-                  onChange={e => setDocTargetLang(e.target.value)}
-                >
-                  {LANGUAGES.map(l => (
-                    <option key={l.code} value={l.code}>{l.flag} {l.name}</option>
-                  ))}
-                </select>
-              </div>
-            </div>
-
-            {docTranslatedText && (
-              <button className="btn-primary" onClick={downloadTranslatedDoc} id="btn-download-doc">
-                <Download size={16} />
-                {t.docsOcr.downloadTranslated}
-              </button>
-            )}
-          </div>
-
-          {/* Document Content Split Preview */}
-          {isProcessingDoc ? (
-            <div className="glass-panel" style={{ textAlign: 'center', padding: '3rem' }}>
-              <Loader2 size={32} className="spin-icon" style={{ margin: '0 auto 1rem auto', color: 'var(--primary)', animation: 'spin 1s linear infinite' }} />
-              <p style={{ color: 'var(--text-muted)' }}>{t.docsOcr.processingDoc}</p>
-            </div>
-          ) : docOriginalText ? (
-            <div className="translation-grid">
-              <div className="translator-box">
-                <div className="box-header">
-                  <span style={{ fontWeight: 600 }}>{t.docsOcr.originalDoc}</span>
-                </div>
-                <div style={{ flex: 1, whiteSpace: 'pre-wrap', overflowY: 'auto', fontSize: '0.95rem', color: 'var(--text-muted)', lineHeight: '1.6' }}>
-                  {docOriginalText}
-                </div>
-              </div>
-
-              <div className="translator-box">
-                <div className="box-header">
-                  <span style={{ fontWeight: 600, color: '#818cf8' }}>{t.docsOcr.translatedDoc}</span>
-                  <button 
-                    className="icon-btn" 
-                    onClick={() => speechService.speakText(docTranslatedText, getLanguageByCode(docTargetLang).voice)}
-                    title="Ascolta testo tradotto"
-                  >
-                    <Volume2 size={18} />
-                  </button>
-                </div>
-                <div style={{ flex: 1, whiteSpace: 'pre-wrap', overflowY: 'auto', fontSize: '0.95rem', color: 'var(--text-main)', lineHeight: '1.6' }}>
-                  {docTranslatedText}
-                </div>
-              </div>
-            </div>
-          ) : null}
+      {error && (
+        <div className="alert-box">
+          <AlertCircle size={16} /> {error}
         </div>
       )}
 
-      {/* SUBTAB 2: PHOTO OCR & LIVE CAMERA SCANNER */}
-      {activeSubTab === 'photo' && (
+      {activeSubTab === 'doc' && (
         <div>
-          {/* Controls: Upload image or Open Camera */}
-          <div style={{ display: 'flex', gap: '1rem', marginBottom: '1.5rem', flexWrap: 'wrap' }}>
-            <button 
-              className="btn-primary" 
-              onClick={() => document.getElementById('photo-input').click()}
-              id="btn-upload-photo"
-            >
-              <Image size={18} />
-              {t.docsOcr.uploadPhoto}
-            </button>
-            <input 
-              id="photo-input" 
-              type="file" 
-              accept="image/*" 
-              style={{ display: 'none' }} 
-              onChange={handleImageUpload} 
-            />
-
-            {!isCameraActive ? (
-              <button className="btn-secondary" onClick={startCamera} id="btn-start-camera">
-                <Camera size={18} />
-                {t.docsOcr.useCamera}
-              </button>
-            ) : (
-              <button className="btn-secondary" onClick={closeCamera} style={{ color: '#ef4444' }}>
-                <X size={18} />
-                {t.docsOcr.closeCamera}
+          <div className="lang-row">
+            <label className="field-label">
+              {t.docsOcr.from}
+              <LanguageSelect value={docSourceLang} onChange={setDocSourceLang} uiLang={uiLang} autoLabel={t.textStudio.detectLanguage} />
+            </label>
+            <label className="field-label">
+              {t.docsOcr.to}
+              <LanguageSelect value={docTargetLang} onChange={setDocTargetLang} uiLang={uiLang} />
+            </label>
+            {docOriginalText && !busyDoc && (
+              <button className="btn-secondary btn-small" onClick={() => { click(); setError(null); translateDocument(docOriginalText); }}>
+                {t.docsOcr.retranslate}
               </button>
             )}
-
-            <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-              <span style={{ fontSize: '0.8rem', color: 'var(--text-dim)' }}>Traduci in:</span>
-              <select 
-                className="lang-selector-select" 
-                value={ocrTargetLang} 
-                onChange={e => setOcrTargetLang(e.target.value)}
-              >
-                {LANGUAGES.map(l => (
-                  <option key={l.code} value={l.code}>{l.flag} {l.name}</option>
-                ))}
-              </select>
-            </div>
           </div>
 
-          {/* Live Camera Viewfinder */}
-          {isCameraActive && (
-            <div className="camera-preview-container" style={{ marginBottom: '1.5rem' }}>
-              <video ref={videoRef} autoPlay playsInline className="camera-video-feed" />
-              <div style={{ padding: '1rem', background: 'rgba(0,0,0,0.8)', display: 'flex', justifyContent: 'center' }}>
-                <button className="btn-primary" onClick={captureCameraFrame} id="btn-snap-photo">
-                  <Camera size={18} />
-                  {t.docsOcr.snapPhoto}
-                </button>
+          <label className={`dropzone-box ${busyDoc ? 'disabled' : ''}`}>
+            <input type="file" accept=".pdf,.docx,.txt,.md,.json,.csv,.srt,.vtt,.html" style={{ display: 'none' }} onChange={handleDocFileUpload} disabled={busyDoc} />
+            <Upload size={38} style={{ color: 'var(--primary)', margin: '0 auto 1rem auto' }} />
+            <h3 style={{ fontSize: '1.15rem', marginBottom: '0.4rem' }}>{t.docsOcr.uploadPrompt}</h3>
+            <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>{t.docsOcr.supportedFormats}</p>
+            {docFile && (
+              <div className="file-chip">
+                <FileText size={16} />
+                {docFile.name} ({(docFile.size / 1024).toFixed(1)} KB{docInfo?.pages ? ` · ${fmt(t.docsOcr.pages, { n: docInfo.pages })}` : ''})
               </div>
+            )}
+          </label>
+          {docInfo?.truncated && <p className="muted-text" style={{ fontSize: '0.8rem', marginTop: '0.5rem' }}>{t.docsOcr.truncated}</p>}
+
+          {busyDoc && (
+            <div className="glass-panel progress-panel">
+              <p>
+                <Loader2 size={16} className="spin-icon" />{' '}
+                {docProgress === 'extracting' ? t.docsOcr.processingDoc : fmt(t.docsOcr.translatingBlocks, { done: docProgress.done, total: docProgress.total })}
+              </p>
+              {docProgress !== 'extracting' && (
+                <>
+                  <div className="ocr-progress-bar">
+                    <div className="ocr-progress-fill" style={{ width: `${(docProgress.done / docProgress.total) * 100}%` }} />
+                  </div>
+                  <button className="btn-secondary btn-small" onClick={() => { cancelRef.current = true; }}>{t.common.cancel}</button>
+                </>
+              )}
             </div>
           )}
 
-          {/* OCR Progress Bar */}
-          {isOcrRunning && (
-            <div className="glass-panel" style={{ padding: '1.25rem', marginBottom: '1.5rem', textAlign: 'center' }}>
-              <p style={{ fontSize: '0.9rem', marginBottom: '0.5rem', color: 'var(--text-main)' }}>
-                {t.docsOcr.extractingText} ({ocrProgress}%)
-              </p>
+          {docOriginalText && (
+            <div className="translation-grid" style={{ marginTop: '1.5rem' }}>
+              <div className="translator-box">
+                <div className="box-header">
+                  <span style={{ fontWeight: 600 }}>{t.docsOcr.originalDoc}</span>
+                  <CopyButton text={docOriginalText} t={t} />
+                </div>
+                <div className="doc-text" dir="auto">{docOriginalText}</div>
+              </div>
+              <div className="translator-box">
+                <div className="box-header">
+                  <span style={{ fontWeight: 600, color: '#818cf8' }}>{t.docsOcr.translatedDoc}</span>
+                  <div className="tool-buttons">
+                    <button className="icon-btn" disabled={!docTranslatedText} onClick={() => speechService.speakText(docTranslatedText, getLanguageByCode(docTargetLang).voice)} aria-label={t.textStudio.listenVoice}>
+                      <Volume2 size={18} />
+                    </button>
+                    <CopyButton text={docTranslatedText} t={t} />
+                    <button className="icon-btn" disabled={!docTranslatedText || busyDoc} onClick={downloadTranslatedDoc} aria-label={t.docsOcr.downloadTranslated} id="btn-download-doc">
+                      <Download size={18} />
+                    </button>
+                  </div>
+                </div>
+                <div className="doc-text" dir="auto" style={{ color: 'var(--text-main)' }}>{docTranslatedText}</div>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {activeSubTab === 'photo' && (
+        <div>
+          <div className="lang-row">
+            <label className="field-label">
+              {t.docsOcr.textLang}
+              <LanguageSelect value={ocrSourceLang} onChange={setOcrSourceLang} uiLang={uiLang} autoLabel={t.docsOcr.latinAuto} />
+            </label>
+            <label className="field-label">
+              {t.docsOcr.to}
+              <LanguageSelect
+                value={ocrTargetLang}
+                onChange={v => {
+                  setOcrTargetLang(v);
+                  if (ocrExtractedText) translateOcr(ocrExtractedText, v);
+                }}
+                uiLang={uiLang}
+              />
+            </label>
+          </div>
+          {!ocrIsOffline(ocrSourceLang) && native && (
+            <p className="muted-text" style={{ fontSize: '0.8rem', marginBottom: '0.75rem' }}>
+              <WifiOff size={14} /> {t.docsOcr.onlineScript}
+            </p>
+          )}
+
+          <div className="button-row">
+            {native ? (
+              <>
+                <button className="btn-primary" onClick={() => pickNativePhoto(CameraSource.Camera)} disabled={ocrProgress !== null} id="btn-start-camera">
+                  <CameraIcon size={18} />
+                  {t.docsOcr.useCamera}
+                </button>
+                <button className="btn-secondary" onClick={() => pickNativePhoto(CameraSource.Photos)} disabled={ocrProgress !== null} id="btn-upload-photo">
+                  <Image size={18} />
+                  {t.docsOcr.uploadPhoto}
+                </button>
+              </>
+            ) : (
+              <label className="btn-primary" id="btn-upload-photo">
+                <Image size={18} />
+                {t.docsOcr.uploadPhoto}
+                <input type="file" accept="image/*" capture="environment" style={{ display: 'none' }} onChange={handleImageInput} />
+              </label>
+            )}
+          </div>
+
+          {ocrProgress !== null && (
+            <div className="glass-panel progress-panel">
+              <p>{t.docsOcr.extractingText} ({ocrProgress}%)</p>
               <div className="ocr-progress-bar">
                 <div className="ocr-progress-fill" style={{ width: `${ocrProgress}%` }} />
               </div>
             </div>
           )}
 
-          {/* OCR Results Grid */}
-          {(ocrImage || ocrExtractedText) && (
-            <div className="translation-grid">
-              {/* Photo & Extracted Text */}
+          {ocrImage && (
+            <div className="translation-grid" style={{ marginTop: '1.5rem' }}>
               <div className="translator-box">
                 <div className="box-header">
                   <span style={{ fontWeight: 600 }}>{t.docsOcr.extractedText}</span>
+                  <CopyButton text={ocrExtractedText} t={t} />
                 </div>
-                {ocrImage && (
-                  <div style={{ maxHeight: '180px', overflow: 'hidden', borderRadius: '10px', marginBottom: '1rem' }}>
-                    <img src={ocrImage} alt="Scansione" style={{ width: '100%', objectFit: 'contain', maxHeight: '180px' }} />
-                  </div>
-                )}
-                <div style={{ flex: 1, whiteSpace: 'pre-wrap', overflowY: 'auto', fontSize: '0.95rem', color: 'var(--text-main)', lineHeight: '1.6' }}>
-                  {ocrExtractedText || 'Estrazione in corso...'}
+                <div className="ocr-image-wrap">
+                  <img src={ocrImage} alt="" />
                 </div>
+                <textarea
+                  className="text-area-input"
+                  dir="auto"
+                  rows={5}
+                  value={ocrExtractedText}
+                  onChange={e => setOcrExtractedText(e.target.value)}
+                  onBlur={() => translateOcr()}
+                  placeholder={t.docsOcr.extractedPlaceholder}
+                />
+                <p className="muted-text" style={{ fontSize: '0.75rem' }}>{t.docsOcr.editHint}</p>
               </div>
-
-              {/* Translated Output */}
               <div className="translator-box">
                 <div className="box-header">
-                  <span style={{ fontWeight: 600, color: '#06b6d4' }}>Traduzione Immagine</span>
-                  <button 
-                    className="icon-btn" 
-                    onClick={() => speechService.speakText(ocrTranslatedText, getLanguageByCode(ocrTargetLang).voice)}
-                    disabled={!ocrTranslatedText}
-                  >
-                    <Volume2 size={18} />
-                  </button>
+                  <span style={{ fontWeight: 600, color: '#22d3ee' }}>{t.docsOcr.translatedDoc}</span>
+                  <div className="tool-buttons">
+                    {isTranslatingOcr && <Loader2 size={16} className="spin-icon" />}
+                    <button className="icon-btn" onClick={() => speechService.speakText(ocrTranslatedText, getLanguageByCode(ocrTargetLang).voice)} disabled={!ocrTranslatedText} aria-label={t.textStudio.listenVoice}>
+                      <Volume2 size={18} />
+                    </button>
+                    <CopyButton text={ocrTranslatedText} t={t} />
+                  </div>
                 </div>
-                <div style={{ flex: 1, whiteSpace: 'pre-wrap', overflowY: 'auto', fontSize: '1.05rem', color: 'var(--text-main)', lineHeight: '1.6' }}>
-                  {ocrTranslatedText || 'La traduzione del testo estratto comparirà qui.'}
+                <div className="doc-text" dir="auto" style={{ color: 'var(--text-main)', fontSize: '1.05rem' }}>
+                  {ocrTranslatedText || <span className="muted-text">{t.docsOcr.translationPlaceholder}</span>}
                 </div>
               </div>
             </div>

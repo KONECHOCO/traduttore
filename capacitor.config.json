@@ -1,0 +1,7 @@
+{
+  "appId": "com.ikonet.omnilingo",
+  "appName": "OmniLingo",
+  "webDir": "dist",
+  "ios": { "contentInset": "never", "backgroundColor": "#080c14" },
+  "android": { "backgroundColor": "#080c14" }
+}

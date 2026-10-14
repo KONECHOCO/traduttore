@@ -1,164 +1,138 @@
-import React from 'react';
-import { 
-  Languages, 
-  Mic2, 
-  FileText, 
-  GraduationCap, 
-  Settings, 
-  Moon, 
-  Sun, 
-  Volume2, 
-  VolumeX, 
+import React, { useRef } from 'react';
+import {
+  Languages,
+  Mic2,
+  FileText,
+  GraduationCap,
+  Settings,
+  Moon,
+  Sun,
   History,
-  Sparkles
+  Sparkles,
+  Crown
 } from 'lucide-react';
 import { speechService } from '../services/speechService';
+import { useMonetization, toggleTestAds } from '../services/monetization';
+import { UI_LANGUAGES } from '../data/translations_i18n';
 
-export default function Navbar({ 
-  activeTab, 
-  setActiveTab, 
-  uiLang, 
-  setUiLang, 
-  t, 
-  theme, 
-  setTheme, 
-  soundEnabled, 
-  setSoundEnabled,
+export default function Navbar({
+  activeTab,
+  setActiveTab,
+  uiLang,
+  setUiLang,
+  t,
+  theme,
+  setTheme,
+  soundEnabled,
   onOpenHistory,
-  onOpenGlossary
+  onOpenPro
 }) {
-  const handleTabClick = (tabId) => {
+  const { isPro } = useMonetization();
+  const taps = useRef({ count: 0, at: 0 });
+
+  const click = () => {
     if (soundEnabled) speechService.playClickSound();
-    setActiveTab(tabId);
   };
 
-  const toggleTheme = () => {
-    if (soundEnabled) speechService.playClickSound();
-    const nextTheme = theme === 'dark' ? 'light' : 'dark';
-    setTheme(nextTheme);
-    document.documentElement.setAttribute('data-theme', nextTheme);
+  // 7 tocchi rapidi sul logo: annunci di test on/off (per le build di prova), poi riaprire l'app
+  const handleLogoTap = () => {
+    const now = Date.now();
+    taps.current = now - taps.current.at < 600 ? { count: taps.current.count + 1, at: now } : { count: 1, at: now };
+    if (taps.current.count >= 7) {
+      taps.current = { count: 0, at: 0 };
+      const on = toggleTestAds();
+      alert(on ? 'Test ads ON — restart the app' : 'Test ads OFF — restart the app');
+      return;
+    }
+    click();
+    setActiveTab('text');
   };
 
-  const toggleSound = () => {
-    if (!soundEnabled) speechService.playClickSound();
-    setSoundEnabled(!soundEnabled);
-  };
+  const tabs = [
+    { id: 'text', icon: Languages, label: t.tabs.text },
+    { id: 'live', icon: Mic2, label: t.tabs.live },
+    { id: 'docs', icon: FileText, label: t.tabs.docs },
+    { id: 'learning', icon: GraduationCap, label: t.tabs.learning },
+    { id: 'settings', icon: Settings, label: t.tabs.settings }
+  ];
 
   return (
     <header className="app-header">
       <div className="header-content">
-        <div className="brand-wrapper" onClick={() => handleTabClick('text')}>
+        <div className="brand-wrapper" onClick={handleLogoTap}>
           <div className="brand-logo-badge">
             <Sparkles size={22} />
           </div>
           <div className="brand-info">
             <h1>
               {t.appName}
-              <span className="brand-badge">PRO v2.5</span>
+              {isPro && <span className="brand-badge">PRO</span>}
             </h1>
             <p>{t.appTagline}</p>
           </div>
         </div>
 
-        {/* Navigation Tabs */}
-        <nav className="nav-tabs">
-          <button 
-            className={`tab-btn ${activeTab === 'text' ? 'active' : ''}`}
-            onClick={() => handleTabClick('text')}
-            id="tab-text-btn"
-          >
-            <Languages size={17} />
-            <span>{t.tabs.text}</span>
-          </button>
-
-          <button 
-            className={`tab-btn ${activeTab === 'live' ? 'active' : ''}`}
-            onClick={() => handleTabClick('live')}
-            id="tab-live-btn"
-          >
-            <Mic2 size={17} />
-            <span>{t.tabs.live}</span>
-          </button>
-
-          <button 
-            className={`tab-btn ${activeTab === 'docs' ? 'active' : ''}`}
-            onClick={() => handleTabClick('docs')}
-            id="tab-docs-btn"
-          >
-            <FileText size={17} />
-            <span>{t.tabs.docs}</span>
-          </button>
-
-          <button 
-            className={`tab-btn ${activeTab === 'learning' ? 'active' : ''}`}
-            onClick={() => handleTabClick('learning')}
-            id="tab-learning-btn"
-          >
-            <GraduationCap size={17} />
-            <span>{t.tabs.learning}</span>
-          </button>
-
-          <button 
-            className={`tab-btn ${activeTab === 'settings' ? 'active' : ''}`}
-            onClick={() => handleTabClick('settings')}
-            id="tab-settings-btn"
-          >
-            <Settings size={17} />
-            <span>{t.tabs.settings}</span>
-          </button>
+        <nav className="nav-tabs" aria-label={t.appName}>
+          {tabs.map(({ id, icon: Icon, label }) => (
+            <button
+              key={id}
+              className={`tab-btn ${activeTab === id ? 'active' : ''}`}
+              onClick={() => {
+                click();
+                setActiveTab(id);
+              }}
+              id={`tab-${id}-btn`}
+            >
+              <Icon size={17} />
+              <span>{label}</span>
+            </button>
+          ))}
         </nav>
 
-        {/* Global Action Tools */}
         <div className="header-actions">
-          {/* UI Language Switcher */}
-          <select 
-            className="lang-selector-select" 
-            value={uiLang} 
+          <select
+            className="lang-selector-select hide-mobile"
+            value={uiLang}
             onChange={(e) => {
-              if (soundEnabled) speechService.playClickSound();
+              click();
               setUiLang(e.target.value);
             }}
             title={t.settings.interfaceLang}
+            aria-label={t.settings.interfaceLang}
             id="ui-lang-selector"
           >
-            <option value="it">🇮🇹 Italiano</option>
-            <option value="en">🇬🇧 English</option>
-            <option value="es">🇪🇸 Español</option>
-            <option value="fr">🇫🇷 Français</option>
-            <option value="de">🇩🇪 Deutsch</option>
-            <option value="zh">🇨🇳 中文</option>
-            <option value="ja">🇯🇵 日本語</option>
-            <option value="ar">🇸🇦 العربية</option>
+            {UI_LANGUAGES.map(l => (
+              <option key={l.code} value={l.code}>{l.flag} {l.name}</option>
+            ))}
           </select>
 
-          {/* Sound FX Toggle */}
-          <button 
-            className="action-icon-btn" 
-            onClick={toggleSound}
-            title={soundEnabled ? "Mute sounds" : "Enable tactile sounds"}
-            id="btn-sound-toggle"
-          >
-            {soundEnabled ? <Volume2 size={18} /> : <VolumeX size={18} />}
-          </button>
+          {!isPro && (
+            <button className="action-icon-btn pro-btn" onClick={() => { click(); onOpenPro(); }} title={t.pro.title} aria-label={t.pro.title}>
+              <Crown size={18} />
+            </button>
+          )}
 
-          {/* Theme Toggle */}
-          <button 
-            className="action-icon-btn" 
-            onClick={toggleTheme}
-            title="Toggle Dark / Light Theme"
+          <button
+            className="action-icon-btn"
+            onClick={() => {
+              click();
+              setTheme(theme === 'dark' ? 'light' : 'dark');
+            }}
+            title={t.settings.theme}
+            aria-label={t.settings.theme}
             id="btn-theme-toggle"
           >
             {theme === 'dark' ? <Sun size={18} /> : <Moon size={18} />}
           </button>
 
-          {/* History Modal Trigger */}
-          <button 
-            className="action-icon-btn" 
+          <button
+            className="action-icon-btn"
             onClick={() => {
-              if (soundEnabled) speechService.playClickSound();
+              click();
               onOpenHistory();
             }}
-            title="Cronologia Traduzioni"
+            title={t.history.title}
+            aria-label={t.history.title}
             id="btn-history-toggle"
           >
             <History size={18} />
