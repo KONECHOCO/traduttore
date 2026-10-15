@@ -136,6 +136,8 @@ async function prepareInterstitial() {
 }
 
 async function prepareRewarded() {
+  // OmniLingo non ha un'unità "con premio" reale: senza ID non si carica nulla
+  if (!AD_IDS.rewarded) return;
   try {
     await AdMob.prepareRewardVideoAd({ adId: AD_IDS.rewarded, isTesting: USE_TEST_ADS });
     setState({ rewardedReady: true });

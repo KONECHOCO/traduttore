@@ -9,9 +9,9 @@ android {
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode Integer.parseInt(System.getenv("BUILD_NUMBER") ?: "1")
         versionName "1.0.0"
-        // AdMob App ID: ID di TEST di Google finché non esiste l'app "OmniLingo Android" su AdMob
+        // AdMob App ID dell'app "OmniLingo Android"
         // (sovrascrivibile con ADMOB_ANDROID_APP_ID su Codemagic)
-        manifestPlaceholders = [admobAppId: System.getenv("ADMOB_ANDROID_APP_ID") ?: "ca-app-pub-3940256099942544~3347511713"]
+        manifestPlaceholders = [admobAppId: System.getenv("ADMOB_ANDROID_APP_ID") ?: "ca-app-pub-1151868778464777~9351449166"]
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.

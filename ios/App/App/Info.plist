@@ -66,9 +66,9 @@
 	</array>
 	<key>UIViewControllerBasedStatusBarAppearance</key>
 	<true/>
-	<!-- AdMob: ID di TEST di Google. Sostituire con l'App ID di "OmniLingo iOS" appena creata su AdMob. -->
+	<!-- AdMob: app "OmniLingo iOS" -->
 	<key>GADApplicationIdentifier</key>
-	<string>ca-app-pub-3940256099942544~1458002511</string>
+	<string>ca-app-pub-1151868778464777~2650309444</string>
 	<key>NSUserTrackingUsageDescription</key>
 	<string>Your data will be used to show you more relevant ads and keep OmniLingo free.</string>
 	<key>NSCameraUsageDescription</key>
