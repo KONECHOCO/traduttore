@@ -1,5 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Mic, RotateCw, Volume2, VolumeX, Download, Trash2, Radio, Users, Presentation, Play, Square, AlertCircle } from 'lucide-react';
+import { Mic, RotateCw, Volume2, VolumeX, Download, Trash2, Radio, Users, Presentation, Play, Square, AlertCircle, QrCode, Share2, LogIn, StopCircle } from 'lucide-react';
+import QRCode from 'qrcode';
+import { Share } from '@capacitor/share';
+import { hostRoom, newRoomCode, roomViewerUrl } from '../../services/liveRoom';
+import JoinRoom from './JoinRoom';
 import { getLanguageByCode, languageName } from '../../data/languages';
 import { translateText, translationErrorMessage } from '../../services/translatorService';
 import { speechService } from '../../services/speechService';
@@ -18,8 +22,8 @@ function srtTime(ms) {
   return `${h}:${m}:${s},${msPart}`;
 }
 
-export default function LiveConversation({ t, uiLang, soundEnabled, glossary }) {
-  const [liveMode, setLiveMode] = useState('split');
+export default function LiveConversation({ t, uiLang, soundEnabled, glossary, joinCode }) {
+  const [liveMode, setLiveMode] = useState(joinCode ? 'join' : 'split');
   const [error, setError] = useState(null);
 
   // ---------- Faccia a faccia ----------
@@ -40,6 +44,14 @@ export default function LiveConversation({ t, uiLang, soundEnabled, glossary }) 
   const [transcript, setTranscript] = useState([]);
   const confRef = useRef({ active: false, sessionStart: 0, segmentStart: 0 });
 
+  // ---------- Condivisione con il pubblico (stanza con QR) ----------
+  const roomRef = useRef(null);
+  const [share, setShare] = useState(null); // { code, url, qr, audience, state }
+
+  useEffect(() => {
+    if (joinCode) setLiveMode('join');
+  }, [joinCode]);
+
   // le lingue si leggono dal ref: la sessione si riavvia da sola e non deve usare valori vecchi
   useEffect(() => {
     confRef.current.source = confSource;
@@ -47,6 +59,7 @@ export default function LiveConversation({ t, uiLang, soundEnabled, glossary }) 
   }, [confSource, confTarget]);
 
   useEffect(() => () => {
+    roomRef.current?.end();
     confRef.current.active = false;
     speechService.stopListening();
     speechService.stopSpeaking();
@@ -103,14 +116,20 @@ export default function LiveConversation({ t, uiLang, soundEnabled, glossary }) 
     const started = await speechService.startListening({
       lang: getLanguageByCode(conf.source).voice,
       onPartial: text => {
-        if (!conf.segmentStart) conf.segmentStart = Date.now();
+        if (!conf.segmentStart) {
+          conf.segmentStart = Date.now();
+          conf.segmentId = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+        }
         setLiveOriginal(text);
+        roomRef.current?.sendLine(conf.segmentId, text, false);
       },
       onFinal: async text => {
         const start = (conf.segmentStart || Date.now()) - conf.sessionStart;
         const end = Date.now() - conf.sessionStart;
+        const id = conf.segmentId || `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
         conf.segmentStart = 0;
-        const id = `${Date.now()}-${Math.random()}`;
+        conf.segmentId = null;
+        roomRef.current?.sendLine(id, text, true);
         setTranscript(prev => [...prev, { id, start, end, clock: new Date().toLocaleTimeString(uiLang), original: text, translated: '' }]);
         try {
           const { translatedText } = await translateText({ text, sourceLang: conf.source, targetLang: conf.target, glossary });
@@ -152,6 +171,37 @@ export default function LiveConversation({ t, uiLang, soundEnabled, glossary }) 
     };
     setConfActive(true);
     listenConference();
+  };
+
+  const startSharing = async () => {
+    click();
+    const code = newRoomCode();
+    const url = roomViewerUrl(code);
+    const qr = await QRCode.toDataURL(url, { margin: 1, width: 360, color: { dark: '#0f172a', light: '#ffffff' } });
+    setShare({ code, url, qr, audience: 0, state: 'connecting' });
+    roomRef.current = hostRoom({
+      code,
+      lang: confSource,
+      handlers: {
+        onAudience: n => setShare(sh => (sh ? { ...sh, audience: n } : sh)),
+        onState: st => setShare(sh => (sh ? { ...sh, state: st } : sh))
+      }
+    });
+  };
+
+  const stopSharing = () => {
+    click();
+    roomRef.current?.end();
+    roomRef.current = null;
+    setShare(null);
+  };
+
+  const shareLink = async () => {
+    try {
+      await Share.share({ title: 'OmniLingo Live', text: fmt(t.liveRoom.shareText, { code: share.code }), url: share.url });
+    } catch {
+      // condivisione annullata
+    }
   };
 
   const exportTXT = () => {
@@ -234,6 +284,10 @@ export default function LiveConversation({ t, uiLang, soundEnabled, glossary }) 
             <Presentation size={16} />
             {t.liveConv.modeConf}
           </button>
+          <button className={`mode-toggle-btn ${liveMode === 'join' ? 'active' : ''}`} onClick={() => { click(); setLiveMode('join'); }} id="btn-mode-join">
+            <LogIn size={16} />
+            {t.liveRoom.modeJoin}
+          </button>
         </div>
 
         {liveMode === 'split' ? (
@@ -247,7 +301,7 @@ export default function LiveConversation({ t, uiLang, soundEnabled, glossary }) 
               {t.liveConv.flipScreen}
             </button>
           </div>
-        ) : (
+        ) : liveMode === 'join' ? null : (
           <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
             <button className="btn-secondary btn-small" onClick={exportSRT} disabled={!transcript.length}>
               <Download size={15} />
@@ -299,6 +353,8 @@ export default function LiveConversation({ t, uiLang, soundEnabled, glossary }) 
         </>
       )}
 
+      {liveMode === 'join' && <JoinRoom t={t} uiLang={uiLang} glossary={glossary} initialCode={joinCode} soundEnabled={soundEnabled} />}
+
       {liveMode === 'conference' && (
         <div>
           <div className="glass-panel conf-controls">
@@ -335,6 +391,38 @@ export default function LiveConversation({ t, uiLang, soundEnabled, glossary }) 
                 <Trash2 size={18} />
               </button>
             </div>
+          </div>
+
+          <div className="glass-panel share-panel">
+            {!share ? (
+              <div className="share-intro">
+                <div>
+                  <strong><QrCode size={16} /> {t.liveRoom.shareTitle}</strong>
+                  <p className="muted-text" style={{ fontSize: '0.82rem' }}>{t.liveRoom.shareHelp}</p>
+                </div>
+                <button className="btn-primary btn-small" onClick={startSharing} id="btn-share-room">
+                  <QrCode size={15} /> {t.liveRoom.startShare}
+                </button>
+              </div>
+            ) : (
+              <div className="share-active">
+                <img src={share.qr} alt={share.url} className="share-qr" />
+                <div className="share-info">
+                  <div className="muted-text" style={{ fontSize: '0.8rem' }}>{t.liveRoom.code}</div>
+                  <div className="share-code">{share.code}</div>
+                  <div className="muted-text" style={{ fontSize: '0.8rem', wordBreak: 'break-all' }}>{share.url}</div>
+                  <div style={{ margin: '0.5rem 0', fontSize: '0.9rem' }}>
+                    <Users size={15} style={{ verticalAlign: '-2px' }} /> {fmt(t.liveRoom.audience, { n: share.audience })}
+                    {share.state !== 'live' && <span className="muted-text"> · {share.state === 'error' ? t.liveRoom.shareError : t.liveRoom.reconnecting}</span>}
+                  </div>
+                  <p className="muted-text" style={{ fontSize: '0.78rem' }}>{t.liveRoom.shareHint}</p>
+                  <div className="button-row">
+                    <button className="btn-secondary btn-small" onClick={shareLink}><Share2 size={15} /> {t.common.share}</button>
+                    <button className="btn-secondary btn-small danger" onClick={stopSharing}><StopCircle size={15} /> {t.liveRoom.stopShare}</button>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
 
           <div className="conference-teleprompter">

@@ -42,9 +42,13 @@ export function ocrIsOffline(lang) {
 export async function performOCR(image, lang = 'auto', onProgress) {
   if (native && image.path && ocrIsOffline(lang)) {
     onProgress?.(30);
-    const { text } = await TextRecognition.processImage({ path: image.path, script: MLKIT_SCRIPT[lang] || Script.Latin });
+    const { text, blocks } = await TextRecognition.processImage({ path: image.path, script: MLKIT_SCRIPT[lang] || Script.Latin });
     onProgress?.(100);
-    return { text: text.trim() };
+    // riquadri dei blocchi (coordinate in pixel dell'immagine) per la traduzione sovrapposta alla foto
+    const boxes = (blocks || [])
+      .filter(b => b.boundingBox && b.text.trim())
+      .map(b => ({ text: b.text.trim(), box: b.boundingBox, lines: b.lines?.length || 1 }));
+    return { text: text.trim(), blocks: boxes };
   }
 
   const { createWorker } = await import('tesseract.js');
@@ -55,8 +59,17 @@ export async function performOCR(image, lang = 'auto', onProgress) {
     }
   });
   try {
-    const ret = await worker.recognize(image.webPath);
-    return { text: ret.data.text.trim() };
+    const ret = await worker.recognize(image.webPath, {}, { text: true, blocks: true });
+    // paragrafi: più precisi dei blocchi, che Tesseract tende a unire
+    const paragraphs = (ret.data.blocks || []).flatMap(b => b.paragraphs || []);
+    const boxes = paragraphs
+      .filter(p => p.text?.trim() && p.confidence > 40)
+      .map(p => ({
+        text: p.text.trim().replace(/\s*\n\s*/g, ' '),
+        box: { left: p.bbox.x0, top: p.bbox.y0, right: p.bbox.x1, bottom: p.bbox.y1 },
+        lines: p.lines?.length || 1
+      }));
+    return { text: ret.data.text.trim(), blocks: boxes };
   } finally {
     await worker.terminate();
   }

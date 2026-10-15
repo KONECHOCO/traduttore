@@ -1,0 +1,19 @@
+[Unit]
+Description=OmniLingo Live relay (sottotitoli condivisi)
+After=network.target
+
+[Service]
+User=omnilingo
+WorkingDirectory=/opt/omnilingo-live
+ExecStart=/usr/bin/node relay.mjs
+Environment=PORT=8099
+Restart=always
+RestartSec=3
+MemoryMax=256M
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

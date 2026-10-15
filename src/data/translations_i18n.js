@@ -1,4 +1,5 @@
 // Testi dell'interfaccia in 8 lingue. Le chiavi mancanti in una lingua ricadono sull'inglese.
+import { UI_TRANSLATIONS_V11 } from './translations_v11.js';
 
 export const UI_LANGUAGES = [
   { code: 'it', name: 'Italiano', flag: '🇮🇹' },
@@ -1648,7 +1649,10 @@ function mergeDeep(base, override) {
 const merged = {};
 export const getTranslation = (langCode = 'en') => {
   const code = UI_TRANSLATIONS[langCode] ? langCode : 'en';
-  if (!merged[code]) merged[code] = mergeDeep(en, UI_TRANSLATIONS[code]);
+  if (!merged[code]) {
+    const base = mergeDeep(mergeDeep(en, UI_TRANSLATIONS_V11.en), UI_TRANSLATIONS[code]);
+    merged[code] = mergeDeep(base, UI_TRANSLATIONS_V11[code] || {});
+  }
   return merged[code];
 };
 

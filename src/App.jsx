@@ -9,9 +9,12 @@ import HistoryModal from './components/HistoryModal';
 import ProModal from './components/ProModal';
 import AdBanner from './components/AdBanner';
 import AdDiagnostics from './components/AdDiagnostics';
+import Onboarding from './components/Onboarding';
 import { getTranslation, detectUiLang } from './data/translations_i18n';
 import { initMonetization, trackAdAction, useMonetization } from './services/monetization';
 import { readJSON, writeJSON } from './services/storage';
+import { App as CapApp } from '@capacitor/app';
+import { parseRoomCode } from './services/liveRoom';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('text');
@@ -32,9 +35,23 @@ export default function App() {
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
   const [isProOpen, setIsProOpen] = useState(false);
   const { bannerHeight } = useMonetization();
+  const [joinCode, setJoinCode] = useState(null);
+  // niente benvenuto negli screenshot per gli store
+  const [showOnboarding, setShowOnboarding] = useState(() => !localStorage.getItem('omni_onboarded') && !location.search.includes('storeshot'));
 
   useEffect(() => {
     initMonetization();
+    // Link omnilingo://join/CODICE (dalla pagina web della stanza o da un QR): apre la conferenza come ascoltatore
+    const handle = CapApp.addListener('appUrlOpen', ({ url }) => {
+      const code = /join\//i.test(url) ? parseRoomCode(url) : null;
+      if (code) {
+        setJoinCode(code);
+        setActiveTab('live');
+      }
+    });
+    return () => {
+      handle.then(h => h.remove()).catch(() => {});
+    };
   }, []);
 
   useEffect(() => {
@@ -129,7 +146,7 @@ export default function App() {
           />
         )}
 
-        {activeTab === 'live' && <LiveConversation {...common} />}
+        {activeTab === 'live' && <LiveConversation {...common} joinCode={joinCode} />}
 
         {activeTab === 'docs' && <DocumentScanner {...common} />}
 
@@ -168,6 +185,17 @@ export default function App() {
         t={t}
         uiLang={uiLang}
       />
+
+      {showOnboarding && (
+        <Onboarding
+          t={t}
+          uiLang={uiLang}
+          onDone={() => {
+            localStorage.setItem('omni_onboarded', '1');
+            setShowOnboarding(false);
+          }}
+        />
+      )}
 
       <ProModal isOpen={isProOpen} onClose={() => setIsProOpen(false)} t={t} />
       <AdBanner t={t} onUpgrade={() => setIsProOpen(true)} />

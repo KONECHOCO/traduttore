@@ -79,6 +79,17 @@
 	<string>OmniLingo uses the microphone for voice dictation, face-to-face conversation and live subtitles.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
 	<string>OmniLingo converts your speech to text so it can be translated.</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>com.ikonet.omnilingo</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>omnilingo</string>
+			</array>
+		</dict>
+	</array>
 	<key>CFBundleLocalizations</key>
 	<array>
 		<string>it</string>

@@ -8,6 +8,46 @@ import { languageName } from '../../data/languages';
 import { UI_LANGUAGES, fmt } from '../../data/translations_i18n';
 import { PRIVACY_URL, SUPPORT_EMAIL, APP_VERSION } from '../../config';
 import LanguageSelect from '../LanguageSelect';
+import { useProgress, setGoal, setReminder } from '../../services/progress';
+import { Bell, GraduationCap } from 'lucide-react';
+
+function StudySettings({ t }) {
+  const progress = useProgress();
+  const [time, setTime] = useState(progress.reminder || '19:00');
+  const [msg, setMsg] = useState(null);
+
+  const apply = async (value) => {
+    setMsg(null);
+    try {
+      await setReminder(value, { title: t.settings.reminderTitle, body: t.settings.reminderBody });
+    } catch {
+      setMsg(t.settings.reminderDenied);
+    }
+  };
+
+  return (
+    <section className="settings-section">
+      <h3><GraduationCap size={18} style={{ color: '#f97316' }} /> {t.settings.study}</h3>
+      <div className="button-row">
+        <label className="field-label inline">
+          {t.settings.goalLabel}
+          <select className="lang-selector-select" value={progress.goal} onChange={e => setGoal(Number(e.target.value))}>
+            {[5, 10, 20, 30, 50].map(n => <option key={n} value={n}>{n}</option>)}
+          </select>
+        </label>
+      </div>
+      <div className="button-row" style={{ marginTop: '0.75rem' }}>
+        <Bell size={16} />
+        <span style={{ fontSize: '0.9rem' }}>{t.settings.reminder}</span>
+        <input type="time" className="text-input" value={time} onChange={e => setTime(e.target.value)} style={{ width: '7.5rem', padding: '0.4rem 0.6rem' }} />
+        <button className={`btn-secondary btn-small ${progress.reminder ? 'selected' : ''}`} onClick={() => apply(progress.reminder === time ? null : time)}>
+          {progress.reminder && progress.reminder === time ? t.common.on : t.common.off}
+        </button>
+      </div>
+      {msg && <p className="error-text" style={{ fontSize: '0.8rem', marginTop: '0.4rem' }}>{msg}</p>}
+    </section>
+  );
+}
 
 function OfflinePacks({ t, uiLang }) {
   const [models, setModels] = useState(null);
@@ -185,6 +225,8 @@ export default function SettingsModal({
         </div>
       </section>
 
+      <StudySettings t={t} />
+
       <section className="settings-section">
         <h3>{t.settings.data}</h3>
         <p className="muted-text" style={{ fontSize: '0.85rem', marginBottom: '0.75rem' }}>
@@ -208,6 +250,7 @@ export default function SettingsModal({
       <section className="settings-section">
         <h3><ShieldCheck size={18} style={{ color: 'var(--success)' }} /> {t.settings.privacyTitle}</h3>
         <p className="muted-text" style={{ fontSize: '0.85rem' }}>{t.settings.privacyText}</p>
+        <p className="muted-text" style={{ fontSize: '0.85rem', marginTop: '0.4rem' }}>{t.settings.privacyShare}</p>
         <div className="button-row" style={{ marginTop: '0.75rem' }}>
           <a className="btn-secondary btn-small" href={PRIVACY_URL} target="_blank" rel="noreferrer">
             <ShieldCheck size={15} /> {t.settings.privacyPolicy}

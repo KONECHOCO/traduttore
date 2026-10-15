@@ -1,5 +1,5 @@
 import React, { useState, useRef } from 'react';
-import { FileText, Camera as CameraIcon, Upload, Image, Download, Loader2, Volume2, Copy, Check, AlertCircle, WifiOff } from 'lucide-react';
+import { FileText, Camera as CameraIcon, Upload, Image, Download, Loader2, Volume2, Copy, Check, AlertCircle, WifiOff, Layers, FileType2, Columns2 } from 'lucide-react';
 import { Capacitor } from '@capacitor/core';
 import { Camera, CameraResultType, CameraSource } from '@capacitor/camera';
 import { getLanguageByCode } from '../../data/languages';
@@ -10,6 +10,8 @@ import { exportTextFile, safeFileName } from '../../services/fileExport';
 import { trackAdAction } from '../../services/monetization';
 import { fmt } from '../../data/translations_i18n';
 import LanguageSelect from '../LanguageSelect';
+import PhotoOverlay from './PhotoOverlay';
+import { exportDocx } from '../../services/docExport';
 
 const native = Capacitor.isNativePlatform();
 
@@ -72,6 +74,9 @@ export default function DocumentScanner({ t, uiLang, soundEnabled, glossary }) {
   const [ocrTranslatedText, setOcrTranslatedText] = useState('');
   const [ocrSourceLang, setOcrSourceLang] = useState('auto');
   const [ocrTargetLang, setOcrTargetLang] = useState(uiLang);
+  const [ocrBlocks, setOcrBlocks] = useState([]);
+  const [overlayView, setOverlayView] = useState(true);
+  const [docPairs, setDocPairs] = useState([]);
   const [isTranslatingOcr, setIsTranslatingOcr] = useState(false);
 
   const click = () => {
@@ -83,6 +88,7 @@ export default function DocumentScanner({ t, uiLang, soundEnabled, glossary }) {
     const blocks = splitIntoBlocks(text);
     cancelRef.current = false;
     setDocTranslatedText('');
+    setDocPairs([]);
     setDocProgress({ done: 0, total: blocks.length });
     const out = [];
     let detected = source;
@@ -94,6 +100,7 @@ export default function DocumentScanner({ t, uiLang, soundEnabled, glossary }) {
         if (detected === 'auto' && res.detectedLang) detected = res.detectedLang;
         out.push(res.translatedText);
         setDocTranslatedText(out.join('\n\n'));
+        setDocPairs(prev => [...prev, { orig: blocks[i], trans: res.translatedText }]);
         setDocProgress({ done: i + 1, total: blocks.length });
       }
       if (soundEnabled) speechService.playSuccessChime();
@@ -127,10 +134,27 @@ export default function DocumentScanner({ t, uiLang, soundEnabled, glossary }) {
     }
   };
 
+  const docBaseName = () => safeFileName(docFile ? docFile.name.replace(/\.[^/.]+$/, '') : 'document');
+
   const downloadTranslatedDoc = () => {
     click();
-    const base = docFile ? docFile.name.replace(/\.[^/.]+$/, '') : 'document';
-    exportTextFile(`${safeFileName(base)}_${docTargetLang}.txt`, docTranslatedText);
+    exportTextFile(`${docBaseName()}_${docTargetLang}.txt`, docTranslatedText);
+  };
+
+  const downloadDocx = async (bilingual) => {
+    click();
+    try {
+      await exportDocx({
+        filename: `${docBaseName()}_${docTargetLang}${bilingual ? '_bilingual' : ''}.docx`,
+        title: docFile?.name || 'OmniLingo',
+        pairs: docPairs,
+        bilingual,
+        labels: { original: t.docsOcr.originalDoc, translation: t.docsOcr.translatedDoc }
+      });
+    } catch (err) {
+      console.error('DOCX export error', err);
+      setError(t.errors.DOC_FAILED);
+    }
   };
 
   // ---------- Foto ----------
@@ -139,9 +163,11 @@ export default function DocumentScanner({ t, uiLang, soundEnabled, glossary }) {
     setOcrImage(image.webPath);
     setOcrExtractedText('');
     setOcrTranslatedText('');
+    setOcrBlocks([]);
     setOcrProgress(5);
     try {
-      const { text } = await performOCR(image, ocrSourceLang, p => setOcrProgress(p));
+      const { text, blocks } = await performOCR(image, ocrSourceLang, p => setOcrProgress(p));
+      setOcrBlocks((blocks || []).map(b => ({ ...b, translated: '' })));
       setOcrProgress(null);
       if (!text) {
         setError(t.errors.OCR_EMPTY);
@@ -149,7 +175,7 @@ export default function DocumentScanner({ t, uiLang, soundEnabled, glossary }) {
       }
       setOcrExtractedText(text);
       trackAdAction();
-      await translateOcr(text);
+      await translateOcr(text, ocrTargetLang, blocks || []);
     } catch (err) {
       console.error('OCR Error:', err);
       setOcrProgress(null);
@@ -157,12 +183,24 @@ export default function DocumentScanner({ t, uiLang, soundEnabled, glossary }) {
     }
   };
 
-  const translateOcr = async (text = ocrExtractedText, target = ocrTargetLang) => {
+  const translateOcr = async (text = ocrExtractedText, target = ocrTargetLang, blocks = ocrBlocks) => {
     if (!text.trim()) return;
     setIsTranslatingOcr(true);
     try {
       const res = await translateText({ text, sourceLang: ocrSourceLang, targetLang: target, glossary });
       setOcrTranslatedText(res.translatedText);
+      // traduzione blocco per blocco per disegnarla sopra la foto
+      const source = res.detectedLang || ocrSourceLang;
+      const translatedBlocks = [];
+      for (const b of blocks) {
+        try {
+          const r = await translateText({ text: b.text, sourceLang: source, targetLang: target, glossary });
+          translatedBlocks.push({ ...b, translated: r.translatedText });
+        } catch {
+          translatedBlocks.push({ ...b, translated: '' });
+        }
+        setOcrBlocks([...translatedBlocks, ...blocks.slice(translatedBlocks.length).map(x => ({ ...x, translated: '' }))]);
+      }
       if (soundEnabled) speechService.playSuccessChime();
     } catch (err) {
       setError(translationErrorMessage(err, t));
@@ -279,8 +317,14 @@ export default function DocumentScanner({ t, uiLang, soundEnabled, glossary }) {
                       <Volume2 size={18} />
                     </button>
                     <CopyButton text={docTranslatedText} t={t} />
-                    <button className="icon-btn" disabled={!docTranslatedText || busyDoc} onClick={downloadTranslatedDoc} aria-label={t.docsOcr.downloadTranslated} id="btn-download-doc">
+                    <button className="icon-btn" disabled={!docTranslatedText || busyDoc} onClick={downloadTranslatedDoc} aria-label={t.docsOcr.downloadTranslated} title={t.docsOcr.downloadTranslated} id="btn-download-doc">
                       <Download size={18} />
+                    </button>
+                    <button className="icon-btn" disabled={!docPairs.length || busyDoc} onClick={() => downloadDocx(false)} aria-label={t.docsOcr.exportWord} title={t.docsOcr.exportWord}>
+                      <FileType2 size={18} />
+                    </button>
+                    <button className="icon-btn" disabled={!docPairs.length || busyDoc} onClick={() => downloadDocx(true)} aria-label={t.docsOcr.exportBilingual} title={t.docsOcr.exportBilingual}>
+                      <Columns2 size={18} />
                     </button>
                   </div>
                 </div>
@@ -353,8 +397,13 @@ export default function DocumentScanner({ t, uiLang, soundEnabled, glossary }) {
                   <span style={{ fontWeight: 600 }}>{t.docsOcr.extractedText}</span>
                   <CopyButton text={ocrExtractedText} t={t} />
                 </div>
-                <div className="ocr-image-wrap">
-                  <img src={ocrImage} alt="" />
+                {ocrBlocks.length > 0 && (
+                  <button className="btn-secondary btn-small" style={{ marginBottom: '0.6rem' }} onClick={() => setOverlayView(!overlayView)}>
+                    <Layers size={14} /> {overlayView ? t.docsOcr.showOriginalPhoto : t.docsOcr.showOverlay}
+                  </button>
+                )}
+                <div className="ocr-image-wrap overlay">
+                  <PhotoOverlay src={ocrImage} blocks={ocrBlocks} showOriginal={!overlayView} />
                 </div>
                 <textarea
                   className="text-area-input"

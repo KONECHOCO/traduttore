@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
-import { Layers, Mic, BookOpen, Award, Volume2, Trash2, Star, Loader2, RotateCw, CheckCircle2, AlertCircle, ChevronRight } from 'lucide-react';
+import { Layers, Mic, BookOpen, Award, Volume2, Trash2, Star, Loader2, RotateCw, CheckCircle2, AlertCircle, ChevronRight, Flame, Target } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { PHRASEBOOK, PHRASEBOOK_CATEGORIES, scheduleCard, isDue, SRS_INTERVALS_DAYS } from '../../data/learningData';
 import { speechService, textSimilarity } from '../../services/speechService';
@@ -7,6 +7,7 @@ import { translateText, translationErrorMessage } from '../../services/translato
 import { getLanguageByCode, languageName } from '../../data/languages';
 import { fmt } from '../../data/translations_i18n';
 import LanguageSelect from '../LanguageSelect';
+import { recordActivity, useProgress } from '../../services/progress';
 
 function shuffle(list) {
   const a = [...list];
@@ -36,9 +37,29 @@ export default function LearningAcademy({ flashcards, setFlashcards, t, uiLang, 
   ];
 
   const [practicePhrase, setPracticePhrase] = useState(null);
+  const progress = useProgress();
+  const goalPct = Math.min(100, Math.round((progress.today / progress.goal) * 100));
 
   return (
     <div className="learning-academy-container">
+      <div className="streak-bar">
+        <div className="streak-item">
+          <Flame size={20} style={{ color: progress.streak ? '#f97316' : 'var(--text-dim)' }} />
+          <div>
+            <strong>{fmt(t.learning.streakDays, { n: progress.streak })}</strong>
+            <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)' }}>{fmt(t.learning.bestStreak, { n: progress.best || 0 })}</div>
+          </div>
+        </div>
+        <div className="streak-item grow">
+          <Target size={20} style={{ color: goalPct >= 100 ? 'var(--success)' : 'var(--primary)' }} />
+          <div style={{ flex: 1 }}>
+            <strong>{fmt(t.learning.dailyGoal, { done: progress.today, goal: progress.goal })}</strong>
+            <div className="ocr-progress-bar" style={{ margin: '0.3rem 0 0' }}>
+              <div className="ocr-progress-fill" style={{ width: `${goalPct}%` }} />
+            </div>
+          </div>
+        </div>
+      </div>
       <div className="live-header-bar">
         <div className="nav-tabs sub-tabs">
           {tabs.map(({ id, icon: Icon, label }) => (
@@ -84,6 +105,7 @@ function FlashcardDeck({ flashcards, setFlashcards, t, uiLang, click }) {
   const current = dueCards[0];
 
   const answer = (knew) => {
+    recordActivity();
     click();
     setIsFlipped(false);
     setFlashcards(prev => prev.map(c => (c.id === current.id ? scheduleCard(c, knew) : c)));
@@ -315,6 +337,7 @@ function PronunciationCoach({ learnLang, phrase, t, uiLang, soundEnabled }) {
       onFinal: text => {
         setHeard(text);
         const s = textSimilarity(targetRef.current, text);
+        recordActivity();
         setScore(s);
         if (s >= 85) {
           if (soundEnabled) speechService.playSuccessChime();
@@ -448,6 +471,7 @@ function Quiz({ flashcards, t, click, soundEnabled }) {
                 if (selected !== null) return;
                 click();
                 setSelected(i);
+                recordActivity();
                 if (i === q.correctIndex) {
                   setScore(s => s + 1);
                   if (soundEnabled) speechService.playSuccessChime();

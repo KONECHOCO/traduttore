@@ -44,10 +44,15 @@ async function setDevice(d) {
   await cdp.send('Emulation.setDeviceMetricsOverride', { width: d.width, height: d.height, deviceScaleFactor: d.deviceScaleFactor, mobile: d.mobile });
   await page.waitForTimeout(400);
 }
-async function shotAll(name) {
+async function shotAll(name, scrollTo) {
   for (const [key, d] of Object.entries(DEVICES)) {
     await setDevice(d);
-    await page.evaluate(() => window.scrollTo(0, 0));
+    await page.evaluate(sel => {
+      window.scrollTo(0, 0);
+      if (sel) document.querySelector(sel)?.scrollIntoView({ block: 'start' });
+      if (sel) window.scrollBy(0, -70);
+    }, scrollTo || null);
+    await page.waitForTimeout(300);
     // cattura via CDP: rispetta le dimensioni e la densità impostate con setDeviceMetricsOverride
     const { data } = await cdp.send('Page.captureScreenshot', { format: 'png' });
     await writeFile(`${OUT}/${name}-${d.suffix}.png`, Buffer.from(data, 'base64'));
@@ -75,9 +80,12 @@ await shotAll('1-translate');
 await page.click('#tab-live-btn');
 await shotAll('2-live');
 
-// 3. Sottotitoli conferenza
+// 3. Sottotitoli conferenza condivisi con QR (stanza vera sul relay)
 await page.click('#btn-mode-conference');
-await shotAll('3-conference');
+await page.click('#btn-share-room');
+await page.waitForSelector('.share-qr');
+await page.waitForTimeout(1500);
+await shotAll('3-conference', '.share-panel');
 
 // 4. Frasario tradotto nella lingua studiata
 await page.click('#tab-learning-btn');
@@ -86,9 +94,33 @@ await page.waitForFunction(() => document.querySelectorAll('.phrase-card strong'
 await page.waitForTimeout(500);
 await shotAll('4-learn');
 
-// 5. Documenti e foto
+// 5. Foto con la traduzione sovrapposta (cartello generato, OCR e traduzione reali)
 await page.click('#tab-docs-btn');
-await shotAll('5-docs');
+await page.click('#subtab-ocr-btn');
+const sign = lang === 'en'
+  ? { src: 'es', lines: ['SALIDA DE EMERGENCIA', 'Mantenga esta puerta cerrada', 'Prohibido fumar en esta zona', 'Gracias por su colaboración'] }
+  : { src: 'auto', lines: ['EMERGENCY EXIT', 'Keep this door closed', 'No smoking in this area', 'Thank you for your cooperation'] };
+if (sign.src !== 'auto') await page.locator('.doc-scanner-container .lang-row select').first().selectOption(sign.src);
+await page.evaluate(async (lines) => {
+  const c = document.createElement('canvas');
+  c.width = 900; c.height = 600;
+  const g = c.getContext('2d');
+  g.fillStyle = '#2b6cb0'; g.fillRect(0, 0, 900, 600);
+  g.fillStyle = '#fff'; g.fillRect(60, 60, 780, 220);
+  g.fillStyle = '#111'; g.font = 'bold 56px Arial'; g.fillText(lines[0], 100, 150);
+  g.font = '38px Arial'; g.fillText(lines[1], 110, 230);
+  g.fillStyle = '#fff'; g.font = 'bold 46px Arial'; g.fillText(lines[2], 90, 420);
+  g.font = '34px Arial'; g.fillText(lines[3], 110, 500);
+  const blob = await new Promise(r => c.toBlob(r, 'image/png'));
+  const input = document.querySelector('input[type=file][accept="image/*"]');
+  const dt = new DataTransfer();
+  dt.items.add(new File([blob], 'sign.png', { type: 'image/png' }));
+  input.files = dt.files;
+  input.dispatchEvent(new Event('change', { bubbles: true }));
+}, sign.lines);
+await page.waitForFunction(() => [...document.querySelectorAll('.photo-overlay-box')].length >= 2, null, { timeout: 90000 });
+await page.waitForTimeout(1500);
+await shotAll('5-docs', '.photo-overlay');
 
 // 6. OmniLingo Pro
 await page.click('.pro-btn');

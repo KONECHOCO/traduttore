@@ -1,9 +1,12 @@
 import React, { useState } from 'react';
-import { X, Plus, Trash2, BookOpen } from 'lucide-react';
+import { X, Plus, Trash2, BookOpen, Download, Upload } from 'lucide-react';
+import { toCsv, parseCsv } from '../../services/csv';
+import { exportTextFile } from '../../services/fileExport';
 
 export default function GlossaryModal({ isOpen, onClose, glossary, setGlossary, t }) {
   const [sourceTerm, setSourceTerm] = useState('');
   const [targetTerm, setTargetTerm] = useState('');
+  const [notice, setNotice] = useState(null);
 
   if (!isOpen) return null;
 
@@ -13,6 +16,25 @@ export default function GlossaryModal({ isOpen, onClose, glossary, setGlossary, 
     setGlossary([...glossary, { id: Date.now(), source: sourceTerm.trim(), target: targetTerm.trim() }]);
     setSourceTerm('');
     setTargetTerm('');
+  };
+
+  const exportCsv = () => {
+    exportTextFile('omnilingo-glossary.csv', toCsv([['source', 'target'], ...glossary.map(g => [g.source, g.target])]), 'text/csv');
+  };
+
+  const importCsv = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    const rows = parseCsv(await file.text());
+    // la prima riga è un'intestazione se non sembra un termine (es. "source,target")
+    const data = rows.length && /^(source|origine|term|termine)$/i.test(rows[0][0]?.trim()) ? rows.slice(1) : rows;
+    const known = new Set(glossary.map(g => g.source.toLowerCase()));
+    const added = data
+      .filter(r => r[0]?.trim() && r[1]?.trim() && !known.has(r[0].trim().toLowerCase()))
+      .map((r, i) => ({ id: Date.now() + i, source: r[0].trim(), target: r[1].trim() }));
+    setGlossary([...glossary, ...added]);
+    setNotice(t.glossary.imported.replace('{n}', added.length));
   };
 
   return (
@@ -36,6 +58,17 @@ export default function GlossaryModal({ isOpen, onClose, glossary, setGlossary, 
             {t.glossary.add}
           </button>
         </form>
+
+        <div className="button-row" style={{ marginBottom: '0.75rem' }}>
+          <label className="btn-secondary btn-small">
+            <Upload size={14} /> {t.glossary.importCsv}
+            <input type="file" accept=".csv,text/csv" style={{ display: 'none' }} onChange={importCsv} />
+          </label>
+          <button className="btn-secondary btn-small" onClick={exportCsv} disabled={!glossary.length}>
+            <Download size={14} /> {t.glossary.exportCsv}
+          </button>
+          {notice && <span style={{ fontSize: '0.8rem', color: 'var(--secondary)' }}>{notice}</span>}
+        </div>
 
         <div style={{ maxHeight: '280px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
           {glossary.length === 0 ? (

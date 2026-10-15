@@ -10,6 +10,7 @@ import {
   BookOpen,
   Loader2,
   Share2,
+  Maximize2,
   AlertCircle,
   Download
 } from 'lucide-react';
@@ -22,6 +23,7 @@ import { fmt } from '../../data/translations_i18n';
 import LanguageSelect from '../LanguageSelect';
 import WordInsight from './WordInsight';
 import GlossaryModal from './GlossaryModal';
+import ShowCard from './ShowCard';
 
 // Divide il testo in parole toccabili: Intl.Segmenter riconosce le parole anche in cinese,
 // giapponese e thai (lingue senza spazi); in mancanza si divide sugli spazi.
@@ -64,6 +66,7 @@ export default function TextTranslator({
   const [selectedWord, setSelectedWord] = useState('');
   const [speechRate, setSpeechRate] = useState(1.0);
   const [isGlossaryOpen, setIsGlossaryOpen] = useState(false);
+  const [showFull, setShowFull] = useState(false);
 
   const requestRef = useRef(0);
   const effectiveSource = sourceLang === 'auto' ? detectedLang : sourceLang;
@@ -357,6 +360,19 @@ export default function TextTranslator({
               >
                 {speechRate}x
               </button>
+              <button
+                className="icon-btn"
+                onClick={() => {
+                  click();
+                  setShowFull(true);
+                }}
+                title={t.textStudio.showFull}
+                aria-label={t.textStudio.showFull}
+                disabled={!translatedText}
+                id="btn-show-full"
+              >
+                <Maximize2 size={18} />
+              </button>
               <button className="icon-btn" onClick={handleCopy} title={t.textStudio.copy} aria-label={t.textStudio.copy} disabled={!translatedText} id="btn-copy-target">
                 {copied ? <Check size={18} style={{ color: 'var(--success)' }} /> : <Copy size={18} />}
               </button>
@@ -391,6 +407,10 @@ export default function TextTranslator({
         uiLang={uiLang}
         onSaveToFlashcards={onSaveToFlashcards}
       />
+
+      {showFull && translatedText && (
+        <ShowCard text={translatedText} original={sourceText} lang={targetLang} uiLang={uiLang} t={t} onClose={() => setShowFull(false)} />
+      )}
 
       <GlossaryModal
         isOpen={isGlossaryOpen}

@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="und">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#080c14">
+  <title>OmniLingo Live</title>
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: -apple-system, system-ui, "Segoe UI", Roboto, sans-serif; background: #080c14; color: #f8fafc; }
+    header { position: sticky; top: 0; padding: 12px 16px; background: rgba(8,12,20,.95); border-bottom: 1px solid #1e293b; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+    header strong { font-size: 16px; }
+    .dot { width: 10px; height: 10px; border-radius: 50%; background: #64748b; }
+    .dot.on { background: #10b981; box-shadow: 0 0 0 4px rgba(16,185,129,.2); }
+    #status { color: #94a3b8; font-size: 13px; }
+    main { padding: 16px; max-width: 820px; margin: 0 auto; }
+    .live { font-size: 28px; font-weight: 700; color: #facc15; line-height: 1.35; min-height: 80px; margin-bottom: 18px; }
+    .line { padding: 10px 0; border-bottom: 1px solid #1e293b; font-size: 18px; line-height: 1.5; }
+    .line time { display: block; font-size: 11px; color: #64748b; }
+    .app { margin: 16px 0; padding: 14px; border-radius: 14px; background: #111827; border: 1px solid #1f2937; font-size: 14px; color: #cbd5e1; }
+    .app a { display: inline-block; margin: 8px 8px 0 0; padding: 8px 14px; border-radius: 10px; background: linear-gradient(135deg,#6366f1,#06b6d4); color: #fff; text-decoration: none; font-weight: 600; }
+  </style>
+</head>
+<body>
+  <header>
+    <span class="dot" id="dot"></span>
+    <strong id="title">OmniLingo Live</strong>
+    <span id="status">…</span>
+  </header>
+  <main>
+    <div class="live" id="live" translate="yes"></div>
+    <div class="app" translate="yes">
+      Read the subtitles in your language: use your browser's "Translate" option, or open the room in the OmniLingo app for on-device translation in 59 languages.
+      <div>
+        <a id="openApp" href="#">Open in OmniLingo</a>
+        <a href="https://apps.apple.com/app/id6822897409">App Store</a>
+      </div>
+    </div>
+    <div id="lines"></div>
+  </main>
+  <script>
+    const code = location.pathname.split('/').pop();
+    const base = location.pathname.replace(/\/r\/[A-Z0-9]{6}$/, '');
+    document.getElementById('openApp').href = 'omnilingo://join/' + code;
+    const $ = id => document.getElementById(id);
+    const linesEl = $('lines');
+    let retry = 1000;
+    function addLine(l) {
+      const div = document.createElement('div');
+      div.className = 'line';
+      div.lang = l.lang;
+      const time = document.createElement('time');
+      time.textContent = new Date(l.t).toLocaleTimeString();
+      div.append(time, document.createTextNode(l.text));
+      linesEl.prepend(div);
+    }
+    function setStatus(live, text) {
+      $('dot').classList.toggle('on', live);
+      $('status').textContent = text;
+    }
+    function connect() {
+      const ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + base + '/ws?role=listen&room=' + code);
+      ws.onmessage = ev => {
+        const m = JSON.parse(ev.data);
+        if (m.type === 'hello') {
+          retry = 1000;
+          document.documentElement.lang = m.lang;
+          if (m.title) $('title').textContent = m.title;
+          linesEl.textContent = '';
+          m.history.forEach(addLine);
+          setStatus(m.live, m.live ? 'LIVE' : 'Paused');
+        } else if (m.type === 'line') {
+          $('live').lang = m.lang;
+          $('live').textContent = m.text;
+          if (m.final) addLine(m);
+        } else if (m.type === 'status') {
+          setStatus(m.live, m.ended ? 'Ended' : m.live ? 'LIVE' : 'Paused');
+        }
+      };
+      ws.onclose = ev => {
+        if (ev.code === 4004) { setStatus(false, 'Room not found or closed'); return; }
+        setStatus(false, 'Reconnecting…');
+        setTimeout(connect, retry);
+        retry = Math.min(retry * 2, 15000);
+      };
+    }
+    connect();
+  </script>
+</body>
+</html>
