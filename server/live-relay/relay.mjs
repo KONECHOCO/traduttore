@@ -123,7 +123,7 @@ wss.on('connection', (ws, req) => {
     if (!room) return ws.close(4004, 'no room');
     if (room.listeners.size >= MAX_LISTENERS) return ws.close(4029, 'full');
     room.listeners.add(ws);
-    send(ws, { type: 'hello', lang: room.lang, title: room.title, live: !!room.host, history: room.history });
+    send(ws, { type: 'hello', lang: room.lang, title: room.title, live: !!room.host || !!room.demo, history: room.history });
     audience(room);
     ws.on('message', () => {}); // gli ascoltatori non inviano nulla
     ws.on('close', () => {
@@ -136,11 +136,42 @@ wss.on('connection', (ws, req) => {
   ws.close(4000, 'bad role');
 });
 
+// Stanza dimostrativa DEMO00: quando c'è almeno un ascoltatore, un relatore simulato legge un breve intervento
+// in inglese (serve a provare la funzione con un solo telefono, anche per la revisione degli store).
+const DEMO_CODE = 'DEMO00';
+const DEMO_LINES = [
+  'Good morning everyone, and welcome to this short demonstration of OmniLingo live subtitles.',
+  'I am speaking English, but each of you can read me in your own language on your own phone.',
+  'The speaker\'s phone only sends the recognised text, and every listener translates it on their device.',
+  'You can join a room by scanning the QR code or by typing the six-character code.',
+  'People without the app can follow the original captions from a web page.',
+  'Thank you for listening. Feel free to change your language at any time.'
+];
+rooms.set(DEMO_CODE, { key: 'demo', lang: 'en', title: 'OmniLingo demo', host: null, listeners: new Set(), history: [], lastActive: Date.now(), sent: [], demo: true });
+let demoIndex = 0;
+setInterval(() => {
+  const room = rooms.get(DEMO_CODE);
+  if (!room || room.listeners.size === 0) return;
+  const text = DEMO_LINES[demoIndex % DEMO_LINES.length];
+  const id = `demo-${Date.now()}`;
+  const now = Date.now();
+  broadcast(room, { type: 'status', live: true, lang: 'en', title: room.title });
+  broadcast(room, { type: 'line', id, text: text.split(' ').slice(0, 4).join(' '), final: false, lang: 'en', t: now });
+  setTimeout(() => {
+    const line = { type: 'line', id, text, final: true, lang: 'en', t: Date.now() };
+    room.history.push(line);
+    if (room.history.length > 8) room.history.shift();
+    broadcast(room, line);
+  }, 1200);
+  room.lastActive = now;
+  demoIndex++;
+}, 6000);
+
 // Pulizia stanze scadute e ping per tenere vive le connessioni dietro ai proxy
 setInterval(() => {
   const now = Date.now();
   for (const [code, room] of rooms) {
-    if (!room.host && now - room.lastActive > ROOM_TTL_MS) {
+    if (!room.demo && !room.host && now - room.lastActive > ROOM_TTL_MS) {
       for (const l of room.listeners) l.close(4004, 'room closed');
       rooms.delete(code);
     }
