@@ -97,7 +97,9 @@ let state = {
   bannerHeight: 0,
   unlocks: readStorage(UNLOCKS_KEY, {}),
   testAds: USE_TEST_ADS,
-  diag: []
+  diag: [],
+  // UMP: in UE l'utente deve poter rivedere il consenso dall'app (voce in Impostazioni)
+  privacyOptionsRequired: false
 };
 const listeners = new Set();
 function setState(patch) {
@@ -265,6 +267,7 @@ async function gatherConsent() {
       diag(`UMP dopo il modulo: stato=${info.status} canRequestAds=${info.canRequestAds}`);
     }
     canRequestAds = info.canRequestAds !== false;
+    setState({ privacyOptionsRequired: info.privacyOptionsRequirementStatus === 'REQUIRED' });
   } catch (err) {
     diag(`UMP errore: ${err?.message || err}`);
   }
@@ -462,6 +465,12 @@ export async function restorePro() {
   }
   await refreshProStatus();
   return state.isPro;
+}
+
+/** Riapre il modulo di consenso GDPR (obbligatorio offrirlo quando UMP lo richiede). */
+export async function showPrivacyOptions() {
+  if (!native) return;
+  await AdMob.showPrivacyOptionsForm();
 }
 
 /** Interruttore nascosto per le build di prova: attiva/disattiva gli annunci di test (serve riavviare l'app). */

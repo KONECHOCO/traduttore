@@ -3,7 +3,7 @@ import { Settings, Globe, Moon, Sun, Volume2, VolumeX, Download, Upload, Refresh
 import { speechService } from '../../services/speechService';
 import { isNative, getDownloadedModels, downloadModel, deleteModel } from '../../services/translatorService';
 import { exportTextFile } from '../../services/fileExport';
-import { useMonetization } from '../../services/monetization';
+import { useMonetization, showPrivacyOptions } from '../../services/monetization';
 import { languageName } from '../../data/languages';
 import { UI_LANGUAGES, fmt } from '../../data/translations_i18n';
 import { PRIVACY_URL, SUPPORT_EMAIL, APP_VERSION } from '../../config';
@@ -91,7 +91,7 @@ export default function SettingsModal({
   onOpenPro,
   t
 }) {
-  const { isPro } = useMonetization();
+  const { isPro, privacyOptionsRequired } = useMonetization();
   const [notice, setNotice] = useState(null);
 
   const handleExportBackup = () => {
@@ -212,6 +212,11 @@ export default function SettingsModal({
           <a className="btn-secondary btn-small" href={PRIVACY_URL} target="_blank" rel="noreferrer">
             <ShieldCheck size={15} /> {t.settings.privacyPolicy}
           </a>
+          {privacyOptionsRequired && !isPro && (
+            <button className="btn-secondary btn-small" onClick={() => showPrivacyOptions().catch(() => {})}>
+              <ShieldCheck size={15} /> {t.settings.adConsent}
+            </button>
+          )}
           <a className="btn-secondary btn-small" href={`mailto:${SUPPORT_EMAIL}`}>
             <Mail size={15} /> {t.settings.support}
           </a>

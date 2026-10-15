@@ -190,6 +190,7 @@ const en = {
     privacyTitle: 'Privacy',
     privacyText: 'In the app, translation and photo text recognition run on the device: texts and photos are not sent to our servers. Voice dictation uses your device\'s speech service (Apple or Google), which may process audio on their servers. The free version shows ads (Google AdMob); OmniLingo Pro removes them.',
     privacyPolicy: 'Privacy policy',
+    adConsent: 'Ad privacy choices',
     support: 'Contact support',
     credits: 'Translation and text recognition: Google ML Kit (on-device)'
   },
@@ -392,6 +393,7 @@ const it = {
     privacyTitle: 'Privacy',
     privacyText: 'Nell\'app traduzione e riconoscimento del testo nelle foto avvengono sul dispositivo: testi e foto non vengono inviati ai nostri server. La dettatura vocale usa il servizio vocale del dispositivo (Apple o Google), che può elaborare l\'audio sui propri server. La versione gratuita mostra pubblicità (Google AdMob); OmniLingo Pro la rimuove.',
     privacyPolicy: 'Informativa privacy',
+    adConsent: 'Scelte privacy pubblicità',
     support: 'Contatta l\'assistenza',
     credits: 'Traduzione e riconoscimento testo: Google ML Kit (sul dispositivo)'
   },
@@ -594,6 +596,7 @@ const es = {
     privacyTitle: 'Privacidad',
     privacyText: 'En la app, la traducción y el reconocimiento de texto en fotos se realizan en el dispositivo: los textos y las fotos no se envían a nuestros servidores. El dictado por voz usa el servicio de voz del dispositivo (Apple o Google), que puede procesar el audio en sus servidores. La versión gratuita muestra anuncios (Google AdMob); OmniLingo Pro los elimina.',
     privacyPolicy: 'Política de privacidad',
+    adConsent: 'Opciones de privacidad de anuncios',
     support: 'Contactar con soporte',
     credits: 'Traducción y reconocimiento de texto: Google ML Kit (en el dispositivo)'
   },
@@ -796,6 +799,7 @@ const fr = {
     privacyTitle: 'Confidentialité',
     privacyText: 'Dans l\'application, la traduction et la reconnaissance du texte des photos se font sur l\'appareil : les textes et les photos ne sont pas envoyés à nos serveurs. La dictée vocale utilise le service vocal de l\'appareil (Apple ou Google), qui peut traiter l\'audio sur ses serveurs. La version gratuite affiche des publicités (Google AdMob) ; OmniLingo Pro les supprime.',
     privacyPolicy: 'Politique de confidentialité',
+    adConsent: 'Choix de confidentialité publicitaire',
     support: 'Contacter l\'assistance',
     credits: 'Traduction et reconnaissance de texte : Google ML Kit (sur l\'appareil)'
   },
@@ -998,6 +1002,7 @@ const de = {
     privacyTitle: 'Datenschutz',
     privacyText: 'In der App laufen Übersetzung und Texterkennung in Fotos auf dem Gerät: Texte und Fotos werden nicht an unsere Server gesendet. Die Spracheingabe nutzt den Sprachdienst des Geräts (Apple oder Google), der Audio auf dessen Servern verarbeiten kann. Die kostenlose Version zeigt Werbung (Google AdMob); OmniLingo Pro entfernt sie.',
     privacyPolicy: 'Datenschutzerklärung',
+    adConsent: 'Datenschutzoptionen für Werbung',
     support: 'Support kontaktieren',
     credits: 'Übersetzung und Texterkennung: Google ML Kit (auf dem Gerät)'
   },
@@ -1200,6 +1205,7 @@ const zh = {
     privacyTitle: '隐私',
     privacyText: '在应用中，翻译和照片文字识别都在设备上完成：文本和照片不会发送到我们的服务器。语音输入使用设备的语音服务（Apple 或 Google），其可能在自己的服务器上处理音频。免费版会显示广告（Google AdMob）；OmniLingo Pro 可去除广告。',
     privacyPolicy: '隐私政策',
+    adConsent: '广告隐私选项',
     support: '联系支持',
     credits: '翻译与文字识别：Google ML Kit（设备端）'
   },
@@ -1402,6 +1408,7 @@ const ja = {
     privacyTitle: 'プライバシー',
     privacyText: 'アプリでは、翻訳と写真の文字認識は端末上で行われ、テキストや写真が当社のサーバーに送信されることはありません。音声入力は端末の音声サービス（AppleまたはGoogle）を使用し、音声がそのサーバーで処理される場合があります。無料版には広告（Google AdMob）が表示されます。OmniLingo Proで広告を非表示にできます。',
     privacyPolicy: 'プライバシーポリシー',
+    adConsent: '広告のプライバシー設定',
     support: 'サポートに連絡',
     credits: '翻訳と文字認識：Google ML Kit（端末上）'
   },
@@ -1604,6 +1611,7 @@ const ar = {
     privacyTitle: 'الخصوصية',
     privacyText: 'في التطبيق تتم الترجمة والتعرّف على النص في الصور على الجهاز: لا تُرسَل النصوص والصور إلى خوادمنا. يستخدم الإملاء الصوتي خدمة الكلام في جهازك (Apple أو Google)، وقد تعالج الصوت على خوادمها. تعرض النسخة المجانية إعلانات (Google AdMob)؛ ويزيلها OmniLingo Pro.',
     privacyPolicy: 'سياسة الخصوصية',
+    adConsent: 'خيارات خصوصية الإعلانات',
     support: 'التواصل مع الدعم',
     credits: 'الترجمة والتعرّف على النص: Google ML Kit (على الجهاز)'
   },
