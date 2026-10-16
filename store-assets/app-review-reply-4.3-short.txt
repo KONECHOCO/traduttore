@@ -1,0 +1,28 @@
+Hello App Review team,
+
+thank you for the feedback. We made substantial changes before resubmitting (build 2):
+- Shared live subtitles: the speaker shows a QR code or 6-character code; each attendee follows the talk on their own phone in their own language. Only the recognised text goes through our relay server; every listener translates it on-device. Attendees without the app can follow the captions on a web page. To try it with one device: Live > Join a room > code DEMO00 (a simulated speaker talks).
+- Translation drawn directly on top of the text in photos.
+- Word export of translated documents, including bilingual (original | translation).
+- Full-screen "Show" mode, glossary CSV import/export, study streak/goal/reminders, first-launch download of offline language packs.
+
+1. OmniLingo is built for live multilingual situations (meetings, small conferences, classes, tours) where one person speaks and listeners speak different languages: the speaker talks once and each listener reads in their own language on their own phone. It also offers face-to-face split-screen conversation, photo and PDF/Word translation, and study tools built from the user's translations. Translation, language detection and OCR run on the device (Google ML Kit), so it works offline and texts, photos and documents are not uploaded.
+
+2. Speakers and organisers of meetings, events, lessons and tours with an international audience; attendees who want to follow a talk in their language; travellers without roaming; professionals who cannot upload confidential documents; language learners.
+
+3. Live translation for an audience normally needs interpreters, dedicated hardware or paid captioning in one target language at a time. With OmniLingo one phone is enough and every listener chooses their own language, with on-device translation, combined with offline conversation, document/photo translation with a glossary, and learning.
+
+4. No public beta. Internal testing by the developer on an Android device/emulator and on a test build on the developer's phone led to: adding the EU ad consent message and an "Ad privacy choices" entry; word-level lookup for Japanese/Chinese; a clear message when the detected language equals the target; paragraph-level OCR with fitted text for the photo overlay; end-to-end tests of shared subtitles between two devices and the web page.
+
+5. Standalone product, not part of a suite. The other apps address unrelated needs (transport, fuel prices, fitness, weather, school diaries, IT guides, word games). The closest, DocuMaster, scans and edits PDFs but does not translate; OmniLingo does not scan or edit PDFs.
+
+6. No. No other app on the account is a translator or deals with conversation or live events.
+
+7. Only an in-house monetization module (AdMob, consent, "Pro" purchase that removes ads) and the same React + Capacitor build pipeline. Translation, speech, live rooms and relay server, OCR, documents, learning, UI and content are specific to OmniLingo.
+
+8. No shared codebase or content beyond standard SDKs: Capacitor, Google ML Kit, Tesseract.js, pdf.js, Mammoth, docx, Google Mobile Ads, system speech plugins.
+
+9. No. Conceived and developed by the account holder, INZA KONE (Ikonet Solutions), who owns concept, branding and content; not a commercial template or app generation service. AI-assisted coding tools were used by the developer.
+
+Thank you,
+INZA KONE
